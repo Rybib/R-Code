@@ -213,6 +213,7 @@ function registerIpc(): void {
   handle('threads:delete', (id: string) => orchestrator.delete(id))
   handle('threads:send', (id: string, opts: SendOptions) => orchestrator.send(id, opts))
   handle('threads:interrupt', (id: string) => orchestrator.interrupt(id))
+  handle('threads:sendNow', (id: string, itemId: string) => orchestrator.sendNow(id, itemId))
   handle('threads:compact', (id: string) => orchestrator.compact(id))
   handle('threads:continueFresh', (id: string, summary?: string) => orchestrator.continueInNewChat(id, summary))
   handle('approvals:respond', (requestId: string, decision: 'approve' | 'approveSession' | 'deny') => orchestrator.respondApproval(requestId, decision))

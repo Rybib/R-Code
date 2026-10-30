@@ -44,6 +44,7 @@ export const api = {
   deleteThread: (id: string) => r().invoke<void>('threads:delete', id),
   send: (id: string, opts: SendOptions) => r().invoke<void>('threads:send', id, opts),
   interrupt: (id: string) => r().invoke<void>('threads:interrupt', id),
+  sendNow: (id: string, itemId: string) => r().invoke<void>('threads:sendNow', id, itemId),
   compact: (id: string) => r().invoke<void>('threads:compact', id),
   usage: (agent: AgentId, force?: boolean) => r().invoke<PlanUsage | null>('usage:get', agent, force),
   continueFresh: (id: string, summary?: string) => r().invoke<Thread>('threads:continueFresh', id, summary),

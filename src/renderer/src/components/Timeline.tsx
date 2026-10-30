@@ -2,6 +2,7 @@ import { memo, useMemo, useState } from 'react'
 import clsx from 'clsx'
 import {
   ArrowRightLeft,
+  ArrowUp,
   Check,
   ChevronRight,
   Copy,
@@ -149,7 +150,7 @@ export function Timeline({ threadId, items, running }: { threadId: string; items
 const ItemView = memo(function ItemView({ item, threadId }: { item: TimelineItem; threadId: string }): React.JSX.Element | null {
   switch (item.kind) {
     case 'user':
-      return <UserBubble item={item} />
+      return <UserBubble item={item} threadId={threadId} />
     case 'approval':
       return <ApprovalCard item={item} />
     case 'notice':
@@ -186,7 +187,7 @@ function Divider({ icon, children }: { icon: React.ReactNode; children: React.Re
   )
 }
 
-function UserBubble({ item }: { item: Extract<TimelineItem, { kind: 'user' }> }): React.JSX.Element {
+function UserBubble({ item, threadId }: { item: Extract<TimelineItem, { kind: 'user' }>; threadId?: string }): React.JSX.Element {
   return (
     <div className="fade-up flex justify-end pt-2 pl-16">
       <div className="flex max-w-full flex-col items-end gap-1.5">
@@ -206,7 +207,21 @@ function UserBubble({ item }: { item: Extract<TimelineItem, { kind: 'user' }> })
         >
           {item.text}
         </div>
-        {item.queued && <span className="text-[11px] text-fg-4">Queued — sends when the agent finishes</span>}
+        {item.queued && (
+          <div className="flex items-center gap-2 text-[11px] text-fg-4">
+            <span>Queued, sends when this turn ends</span>
+            {threadId && (
+              <button
+                onClick={() => void api.sendNow(threadId, item.id)}
+                title="Send it to the agent right away instead of waiting"
+                className="flex items-center gap-1 rounded-full border border-line-soft px-2 py-0.5 font-medium text-fg-2 transition-colors hover:border-line hover:text-fg"
+              >
+                <ArrowUp size={11} />
+                Send now
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -217,13 +232,13 @@ function duration(ms: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`
 }
 
-/** Header strip of the finished-task card: time taken, files changed (+/−), commands run. */
+/** Green bar above the finished task's reply: time taken, files changed (+/−), commands run. */
 function FinalHeader({ final }: { final: FinalInfo }): React.JSX.Element {
   const edits = editedFiles(final.tools)
   const commands = final.tools.filter((t) => t.toolKind === 'command').length
   const failed = final.tools.filter((t) => t.status === 'error').length
   return (
-    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-ok/15 px-3.5 py-2 text-[12px] text-fg-3">
+    <div className="mb-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-xl border border-ok/25 bg-ok/[0.06] px-3.5 py-2 text-[12px] text-fg-3">
       <span className="flex items-center gap-1.5 font-medium text-ok">
         <CheckCircle2 size={14} />
         Done
@@ -259,12 +274,10 @@ function AssistantMessage({ item, showLabel, final }: { item: AssistantItem; sho
         </div>
       )}
       {final ? (
-        <div className="overflow-hidden rounded-xl border border-ok/25 bg-ok/[0.035] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+        <>
           <FinalHeader final={final} />
-          <div className="px-3.5 pt-2.5 pb-1">
-            <Markdown text={item.text} />
-          </div>
-        </div>
+          <Markdown text={item.text} />
+        </>
       ) : (
         <Markdown text={item.text} />
       )}

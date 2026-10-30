@@ -226,9 +226,14 @@ function ProjectRow({ name, path, collapsed, onToggle, running }: { name: string
 
 function setSettled(t: ThreadSummary, settled: boolean): void {
   void api.updateThread(t.id, { settledAt: settled ? Date.now() : 0 })
-  // Settling tidies away its tab too, unless you're looking at it right now.
+  if (!settled) return
   const s = useStore.getState()
-  if (settled && s.activeId !== t.id && s.tabs.includes(t.id)) s.closeTab(t.id)
+  if (s.activeId === t.id && s.view === 'chat') {
+    // Settling the chat you're in: carry on in a fresh one in the same place (its project, or none).
+    s.newConversation()
+    s.setDraft({ projectPath: t.projectPath || undefined })
+  } else if (s.tabs.includes(t.id)) s.closeTab(t.id) // tidy away its tab, keep what you're viewing
+
 }
 
 function ThreadRow({ t, active, nested, hint }: { t: ThreadSummary; active: boolean; nested?: boolean; hint?: string }): React.JSX.Element {

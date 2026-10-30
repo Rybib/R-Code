@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
+import { randomUUID } from 'node:crypto'
 import {
   query,
   type PermissionMode as ClaudePermissionMode,
@@ -9,7 +10,7 @@ import {
   type SDKMessage,
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
-import type { AgentStatus, ModelOption, PermissionMode, PlanUsage, Settings, ToolKind, UsageWindow } from '@shared/types'
+import type { AgentStatus, ModelOption, PermissionMode, PlanStep, PlanUsage, Settings, ToolKind, UsageWindow } from '@shared/types'
 import { run, which } from '../env'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
 import { shortPath, truncate, uid, usageBus } from './base'
@@ -89,6 +90,13 @@ export function classifyClaudeTool(name: string, input: any, cwd: string): { kin
       return { kind: 'task', title: input?.description || 'Run subagent', detail: input?.prompt }
     case 'TodoWrite':
       return { kind: 'todo', title: 'Update plan' }
+    case 'TaskCreate':
+      return { kind: 'todo', title: `Add task: ${input?.subject ?? ''}`.trim() }
+    case 'TaskUpdate':
+      return { kind: 'todo', title: input?.status === 'completed' ? `Complete task ${input?.taskId ?? ''}`.trim() : `Update task ${input?.taskId ?? ''}`.trim() }
+    case 'TaskList':
+    case 'TaskGet':
+      return { kind: 'todo', title: 'Check tasks' }
     case 'ExitPlanMode':
       return { kind: 'other', title: 'Plan ready', detail: input?.plan }
     default:
@@ -154,6 +162,14 @@ class ClaudeSession implements AgentSession {
   private thinkingStart = new Map<string, number>()
   private lastContext = 0
   private contextWindow: number | undefined
+  private mainModel: string | undefined
+  // Messages sent to Claude that no reply has consumed yet. A message sent while a turn is
+  // wrapping up isn't folded into that turn; Claude answers it in a turn of its own right
+  // after, so the turn only counts as done once every message has been answered.
+  private unanswered = new Set<string>()
+  private tracksAnswers = false
+  private settleTimer: NodeJS.Timeout | null = null
+  private tasks = new Map<string, PlanStep & { id: string }>()
 
   constructor(private init: SessionInit) {
     this.sessionId = init.resumeId
@@ -192,7 +208,8 @@ class ClaudeSession implements AgentSession {
         pathToClaudeCodeExecutable: claudeExecutable(),
         disallowedTools: ['AskUserQuestion'],
         mcpServers,
-        env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' } as Record<string, string>,
+        // Headless Claude Code leaves out the task list tools the interactive CLI has; turn them on.
+        env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', ...process.env, CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' } as Record<string, string>,
         stderr: (data) => console.error('[claude]', data.trim()),
         canUseTool: async (toolName, toolInput, opts) => {
           if (toolName.startsWith('mcp__rcode__')) return { behavior: 'allow', updatedInput: toolInput }
@@ -219,20 +236,15 @@ class ClaudeSession implements AgentSession {
   }
 
   private async consume(q: Query): Promise<void> {
-    const sink = this.init.sink
     try {
       for await (const msg of q) this.handle(msg)
     } catch (err: any) {
-      if (this.turnActive) sink.turnDone({ error: err?.message ?? String(err) })
-      this.turnActive = false
+      if (this.q === q) this.finishTurn(err?.message ?? String(err))
     } finally {
       if (this.q === q) {
         this.q = null
         this.input = null
-        if (this.turnActive) {
-          this.turnActive = false
-          sink.turnDone()
-        }
+        this.finishTurn()
       }
     }
   }
@@ -240,6 +252,13 @@ class ClaudeSession implements AgentSession {
   private handle(msg: SDKMessage): void {
     const sink = this.init.sink
     const m = msg as any
+    const answering: string[] = m.parent_tool_use_id ? [] : (m.user_message_uuids ?? (m.user_message_uuid ? [m.user_message_uuid] : []))
+    if (answering.length) {
+      this.tracksAnswers = true
+      for (const id of answering) this.unanswered.delete(id)
+    }
+    // A reply is coming in, so a turn we were about to close is still going.
+    if (msg.type !== 'result' && (answering.length || ((msg.type === 'assistant' || msg.type === 'stream_event') && !m.parent_tool_use_id))) this.clearSettle()
     switch (msg.type) {
       case 'rate_limit_event':
         usageBus.emit('refresh', 'claude')
@@ -292,6 +311,7 @@ class ClaudeSession implements AgentSession {
         const parentId = m.parent_tool_use_id ?? undefined
         const message = m.message
         const streamed = !parentId && this.streamedMessages.has(message.id)
+        if (!parentId && message.model && message.model !== '<synthetic>') this.mainModel = message.model
         if (message.usage && !parentId) {
           const u = message.usage
           this.lastContext = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0)
@@ -301,8 +321,9 @@ class ClaudeSession implements AgentSession {
           if (block.type === 'tool_use') {
             const info = classifyClaudeTool(block.name, block.input, this.init.cwd)
             if (block.name === 'TodoWrite' && Array.isArray(block.input?.todos)) {
-              sink.setPlan(block.input.todos.map((t: any) => ({ text: t.content ?? t.activeForm ?? '', status: t.status ?? 'pending' })))
-            }
+              sink.setPlan(block.input.todos.map((t: any) => ({ text: t.content ?? t.activeForm ?? '', active: t.activeForm, status: t.status ?? 'pending' })))
+            } else if (block.name === 'TaskCreate') this.taskInputs.set(block.id, block.input)
+            else if (block.name === 'TaskUpdate') this.updateTask(block.input)
             sink.upsert({
               kind: 'tool',
               id: block.id,
@@ -331,6 +352,7 @@ class ClaudeSession implements AgentSession {
         for (const block of content) {
           if (block?.type !== 'tool_result') continue
           if (!sink.has(block.tool_use_id)) continue
+          this.taskCreated(block.tool_use_id, m.tool_use_result, toolResultText(block.content), block.is_error)
           sink.patch(block.tool_use_id, {
             status: block.is_error ? 'error' : 'done',
             output: truncate(toolResultText(block.content), 30000)
@@ -340,7 +362,10 @@ class ClaudeSession implements AgentSession {
       }
       case 'result': {
         const usage = m.usage ?? {}
-        const modelUsage = m.modelUsage ? (Object.values(m.modelUsage)[0] as any) : undefined
+        // modelUsage also lists small helper models Claude Code calls on the side; use the main one.
+        const entries = Object.entries(m.modelUsage ?? {}) as [string, any][]
+        const modelUsage = (entries.find(([id]) => this.mainModel && (id === this.mainModel || id.startsWith(this.mainModel) || this.mainModel.startsWith(id))) ??
+          entries.sort((a, b) => (b[1]?.contextWindow ?? 0) - (a[1]?.contextWindow ?? 0))[0])?.[1]
         if (modelUsage?.contextWindow) this.contextWindow = modelUsage.contextWindow
         sink.setUsage({
           inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
@@ -350,9 +375,16 @@ class ClaudeSession implements AgentSession {
           contextTokens: this.lastContext || undefined,
           contextWindow: this.contextWindow
         })
-        this.turnActive = false
         const isError = m.subtype !== 'success' || m.is_error
-        sink.turnDone(isError ? { error: m.errors?.join?.('\n') || (typeof m.result === 'string' ? m.result : 'Claude reported an error') } : undefined)
+        const error = isError ? m.errors?.join?.('\n') || (typeof m.result === 'string' ? m.result : 'Claude reported an error') : undefined
+        // (CLIs too old to say which messages a reply answered: assume a steer is still pending.)
+        if (this.unanswered.size <= (this.tracksAnswers ? 0 : 1)) this.finishTurn(error)
+        else {
+          // Something the user sent mid-turn still needs its own reply: stay busy until it
+          // starts (it follows immediately), and give up if it doesn't.
+          this.clearSettle()
+          this.settleTimer = setTimeout(() => this.finishTurn(error), this.tracksAnswers ? 8000 : 2500)
+        }
         break
       }
       default:
@@ -360,7 +392,65 @@ class ClaudeSession implements AgentSession {
     }
   }
 
+  // Claude Code's task list (TaskCreate / TaskUpdate), shown as the chat's plan checklist.
+  private taskInputs = new Map<string, any>() // TaskCreate tool_use id -> its input
+
+  private showTasks(): void {
+    this.init.sink.setPlan([...this.tasks.values()].map(({ id: _id, ...step }) => step))
+  }
+
+  private taskCreated(toolUseId: string, structured: any, text: string, isError?: boolean): void {
+    const input = this.taskInputs.get(toolUseId)
+    if (!input) return
+    this.taskInputs.delete(toolUseId)
+    if (isError) return
+    const id = String(structured?.task?.id ?? text.match(/#(\w+)/)?.[1] ?? this.tasks.size + 1)
+    this.tasks.set(id, { id, text: input.subject ?? input.description ?? 'Task', active: input.activeForm, status: 'pending' })
+    this.showTasks()
+  }
+
+  private updateTask(input: any): void {
+    const id = String(input?.taskId ?? '')
+    const task = this.tasks.get(id)
+    if (!task) return
+    if (input.status === 'deleted') this.tasks.delete(id)
+    else {
+      if (input.status === 'pending' || input.status === 'in_progress' || input.status === 'completed') task.status = input.status
+      if (input.subject) task.text = input.subject
+      if (input.activeForm) task.active = input.activeForm
+    }
+    this.showTasks()
+  }
+
+  private finishTurn(error?: string): void {
+    this.clearSettle()
+    this.unanswered.clear()
+    if (!this.turnActive) return
+    this.turnActive = false
+    this.init.sink.turnDone(error ? { error } : undefined)
+  }
+
+  private clearSettle(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer)
+    this.settleTimer = null
+  }
+
+  /** Feed a user message to Claude, remembering it until a reply consumes it. */
+  private push(content: SDKUserMessage['message']['content'], priority?: 'next'): void {
+    const uuid = randomUUID()
+    this.unanswered.add(uuid)
+    this.input!.push({
+      type: 'user',
+      uuid,
+      message: { role: 'user', content },
+      parent_tool_use_id: null,
+      ...(priority ? { priority } : {}),
+      origin: { kind: 'human' }
+    } as SDKUserMessage)
+  }
+
   async send(input: TurnInput): Promise<void> {
+    if (input.model !== this.currentModel) this.contextWindow = undefined
     const needsRestart =
       this.q && (input.effort !== this.currentEffort || (this.currentModel === 'default') !== (input.model === 'default'))
     if (needsRestart) this.closeQuery()
@@ -380,24 +470,15 @@ class ClaudeSession implements AgentSession {
       content.push({ type: 'image', source: { type: 'base64', media_type: img.mimeType, data: img.data } })
     }
     content.push({ type: 'text', text: input.text })
+    this.clearSettle()
     this.turnActive = true
-    this.input!.push({
-      type: 'user',
-      message: { role: 'user', content },
-      parent_tool_use_id: null,
-      origin: { kind: 'human' }
-    } as SDKUserMessage)
+    this.push(content)
   }
 
   async steer(text: string): Promise<boolean> {
-    if (!this.input) return false
-    this.input.push({
-      type: 'user',
-      message: { role: 'user', content: [{ type: 'text', text }] },
-      parent_tool_use_id: null,
-      priority: 'next',
-      origin: { kind: 'human' }
-    } as SDKUserMessage)
+    if (!this.input || !this.turnActive) return false
+    this.clearSettle()
+    this.push([{ type: 'text', text }], 'next')
     return true
   }
 
@@ -414,6 +495,8 @@ class ClaudeSession implements AgentSession {
   }
 
   private closeQuery(): void {
+    this.clearSettle()
+    this.unanswered.clear()
     this.input?.close()
     try {
       this.q?.close?.()

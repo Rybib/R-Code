@@ -112,6 +112,8 @@ export type TimelineItemKind = TimelineItem['kind']
 
 export interface PlanStep {
   text: string
+  /** Present-tense label while the step is in progress ("Running the tests"). */
+  active?: string
   status: 'pending' | 'in_progress' | 'completed'
 }
 

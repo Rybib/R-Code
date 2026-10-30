@@ -200,7 +200,7 @@ export function browserTools(b: BrowserController, notify: Notify): ToolDef[] {
     {
       name: 'browser_open',
       description:
-        "Open a URL in R-Code's built-in browser (visible to the user in the side panel). Works with local dev servers (http://localhost:3000), file:// URLs and the web. Returns the page's text and its interactive elements with [ref] ids.",
+        "Open a URL in R-Code's built-in browser (visible to the user in the side panel). Works with local dev servers (http://localhost:3000), file:// URLs and the web. Returns the page's text and its interactive elements with [ref] ids. Use it when the user should see a page or for interactive web tasks; for plain lookups (searching, reading docs), use your web search/fetch tools, which don't open the panel.",
       schema: { type: 'object', properties: { url: str('URL to open, e.g. http://localhost:5173') }, required: ['url'] },
       async run(_ctx, args) {
         show()

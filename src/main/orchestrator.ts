@@ -38,17 +38,12 @@ interface QueuedMessage {
   itemId: string
 }
 
-const RCODE_INSTRUCTIONS = `You are running inside R-Code, a desktop app that unifies several coding agents (Claude Code, Codex and Pi) in one conversation UI.
-- The user can switch agents mid-conversation. When that happens you receive a <conversation-context> block describing what the other agents and the user did while you were away. Treat it as shared history and continue seamlessly.
-- R-Code gives you extra tools (prefixed rcode / mcp__rcode__ when exposed over MCP):
-  • delegate_task / list_agents — hand a self-contained task to another agent or model (including free local models via the built-in Pi + Ollama) and get its report back.
-  • suggest_new_chat — propose continuing in a fresh, clean context seeded with your summary when the conversation is long or the topic changed.
-  • browser_open / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_eval / browser_console — drive R-Code's built-in browser, which opens beside the chat for the user to see. Use it to show the user a page, check a local dev server, or do interactive web tasks. For plain lookups (searching, reading docs or an article), use your web search/fetch tools instead, which don't open the browser.
-  • ios_build_and_run / ios_screenshot / ios_tap / ios_swipe / ios_type_text / ios_describe_ui / ios_list_simulators / ios_boot_simulator / ios_open_url / ios_app_logs — build Xcode projects, run them in the iOS Simulator (shown live in R-Code) and test them like a user.
-- Prefer delegating large, separable side-quests (research, reviews, bulk edits) so your own context stays clean.
-- Keep answers well-formatted Markdown.`
+// Claude Code and Codex run on their own harness untouched: R-Code adds no system prompt for
+// them (its tools describe themselves over MCP, and shared history explains itself where it
+// appears). Pi is R-Code's own embedded agent, so it gets a short orientation.
+const PI_INSTRUCTIONS = `You are running inside R-Code, a desktop app where the user works with several coding agents (Claude Code, Codex and you, Pi) in one conversation. R-Code gives you extra tools for its built-in browser, the iOS Simulator and delegating to other agents; each tool says when to use it. Work in the current folder by default, but when the user asks, you can read, run and change anything on their computer; R-Code asks them before actions that need approval. Keep answers well-formatted Markdown.`
 
-const CHILD_INSTRUCTIONS = `You are a sub-agent running inside R-Code. Another agent delegated one self-contained task to you. Do the task fully, then finish with a concise report of what you did, what you found, and anything the delegating agent must know. Your final message is returned verbatim to the delegating agent.`
+const CHILD_INSTRUCTIONS = `You are a sub-agent: another agent delegated this one task to you. Do it fully, then end with a concise report of what you did and found. Your final message is returned to the delegating agent.`
 
 export class Orchestrator {
   private threads = new Map<string, Thread>()
@@ -310,7 +305,7 @@ export class Orchestrator {
         permissionMode: mode,
         settings,
         sink: this.makeSink(t, agent),
-        instructions: isChild ? `${RCODE_INSTRUCTIONS}\n\n${CHILD_INSTRUCTIONS}` : RCODE_INSTRUCTIONS,
+        instructions: [agent === 'pi' ? PI_INSTRUCTIONS : '', isChild ? CHILD_INSTRUCTIONS : ''].filter(Boolean).join('\n\n') || undefined,
         bridge: this.bridge,
         allowDelegation: !isChild
       })
@@ -340,10 +335,11 @@ export class Orchestrator {
       }
     }
     if (!parts.length) return undefined
-    return `<conversation-context>\n${parts.join('\n\n')}\n</conversation-context>`
+    return `<conversation-context>\nBackground from this conversation, for reference only. Reply to the user's new message after this block.\n\n${parts.join('\n\n')}\n</conversation-context>`
   }
 
-  async send(threadId: string, opts: SendOptions): Promise<void> {
+  /** `queuedItemId`: the queued bubble this message was shown as, which now becomes the sent one. */
+  async send(threadId: string, opts: SendOptions, queuedItemId?: string): Promise<void> {
     const t = this.threads.get(threadId)
     if (!t) throw new Error('Thread not found')
     const agent = opts.agent ?? t.agent
@@ -354,21 +350,15 @@ export class Orchestrator {
     if (t.settledAt) t.settledAt = undefined
 
     if (this.running.has(threadId)) {
-      // Busy: steer the running agent if it's the same one, otherwise queue.
-      const runningAgent = this.running.get(threadId)!
-      const sess = this.sessions.get(threadId)?.[runningAgent]
-      const userItem: TimelineItem = { kind: 'user', id: uid('u'), ts: Date.now(), text: opts.text, images: opts.images, agent: runningAgent }
-      if (runningAgent === agent && sess?.steer && (await sess.steer(opts.text))) {
-        t.items.push(userItem)
-        this.emit({ type: 'item', threadId, item: userItem })
-        this.touch(t)
-        return
+      // Busy: queue it for when the turn ends (the user can still push it in with "Send now").
+      const existing = queuedItemId && t.items.some((i) => i.id === queuedItemId)
+      const queued: TimelineItem = { kind: 'user', id: existing ? queuedItemId! : uid('u'), ts: Date.now(), text: opts.text, images: opts.images, agent, queued: true }
+      if (!existing) {
+        t.items.push(queued)
+        this.emit({ type: 'item', threadId, item: queued })
       }
-      const queued = { ...userItem, queued: true, agent }
-      t.items.push(queued)
-      this.emit({ type: 'item', threadId, item: queued })
       const q = this.queues.get(threadId) ?? []
-      q.push({ opts: { ...opts, agent, model, effort, permissionMode: mode }, itemId: queued.id })
+      q[existing ? 'unshift' : 'push']({ opts: { ...opts, agent, model, effort, permissionMode: mode }, itemId: queued.id })
       this.queues.set(threadId, q)
       this.touch(t)
       return
@@ -379,6 +369,10 @@ export class Orchestrator {
       t.items.push(handoff)
       this.emit({ type: 'item', threadId, item: handoff })
     }
+    if ((agent !== t.agent || model !== t.model) && t.usage) {
+      // Context size belongs to the model; the new one reports its own after its first reply.
+      t.usage = { ...t.usage, contextTokens: undefined, contextWindow: undefined }
+    }
     t.agent = agent
     t.model = model
     t.effort = effort
@@ -387,9 +381,12 @@ export class Orchestrator {
 
     const contextBlock = this.contextFor(t, agent, t.items.length)
     if (t.contextResync?.includes(agent)) t.contextResync = t.contextResync.filter((a) => a !== agent)
-    const userItem: TimelineItem = { kind: 'user', id: uid('u'), ts: Date.now(), text: opts.text, images: opts.images, agent }
+    const wasQueued = queuedItemId ? t.items.findIndex((i) => i.id === queuedItemId) : -1
+    if (wasQueued >= 0) t.items.splice(wasQueued, 1)
+    const userItem: TimelineItem = { kind: 'user', id: wasQueued >= 0 ? queuedItemId! : uid('u'), ts: Date.now(), text: opts.text, images: opts.images, agent }
     t.items.push(userItem)
-    this.emit({ type: 'item', threadId, item: userItem })
+    if (wasQueued >= 0) this.emit({ type: 'reset', threadId, items: t.items })
+    else this.emit({ type: 'item', threadId, item: userItem })
     if (t.title === 'New conversation' && getSettings().autoTitle) t.title = makeTitle(opts.text)
     this.running.set(threadId, agent)
     this.emit({ type: 'status', threadId, running: true })
@@ -448,12 +445,7 @@ export class Orchestrator {
 
     const q = this.queues.get(t.id)
     const next = q?.shift()
-    if (next) {
-      const idx = t.items.findIndex((i) => i.id === next.itemId)
-      if (idx >= 0) t.items.splice(idx, 1)
-      this.emit({ type: 'reset', threadId: t.id, items: t.items })
-      setTimeout(() => void this.send(t.id, next.opts), 50)
-    }
+    if (next) setTimeout(() => void this.send(t.id, next.opts, next.itemId), 50)
   }
 
   private maybeSuggestFreshStart(t: Thread): void {
@@ -476,9 +468,40 @@ export class Orchestrator {
     }
   }
 
-  async interrupt(threadId: string): Promise<void> {
+  /**
+   * "Send now" on a queued message: hand it to the running agent mid-turn when it can take it,
+   * otherwise stop the current turn so the message goes next.
+   */
+  async sendNow(threadId: string, itemId: string): Promise<void> {
+    const t = this.threads.get(threadId)
+    const q = this.queues.get(threadId) ?? []
+    const idx = q.findIndex((m) => m.itemId === itemId)
+    if (!t || idx < 0) return
+    const entry = q[idx]
+    const runningAgent = this.running.get(threadId)
+    if (!runningAgent) return // the turn just ended; it's already being sent
+    const sess = this.sessions.get(threadId)?.[runningAgent]
+    if (runningAgent === (entry.opts.agent ?? t.agent) && sess?.steer && !entry.opts.images?.length && (await sess.steer(entry.opts.text))) {
+      q.splice(idx, 1)
+      const pos = t.items.findIndex((i) => i.id === itemId)
+      const item = pos >= 0 ? t.items.splice(pos, 1)[0] : undefined
+      if (item?.kind === 'user') {
+        item.queued = false
+        item.ts = Date.now()
+        t.items.push(item)
+      }
+      this.emit({ type: 'reset', threadId, items: t.items })
+      this.touch(t)
+      return
+    }
+    q.splice(idx, 1)
+    q.unshift(entry)
+    await this.interrupt(threadId, true)
+  }
+
+  async interrupt(threadId: string, keepQueue = false): Promise<void> {
     const agent = this.running.get(threadId)
-    this.queues.delete(threadId)
+    if (!keepQueue) this.dropQueue(threadId)
     if (!agent) return
     this.denyPendingApprovals(threadId)
     const sess = this.sessions.get(threadId)?.[agent]
@@ -488,6 +511,18 @@ export class Orchestrator {
       const t = this.threads.get(threadId)
       if (t && this.running.get(threadId) === agent) this.onTurnDone(t, agent)
     }, 4000)
+  }
+
+  /** Stop means stop: queued messages are discarded along with their bubbles. */
+  private dropQueue(threadId: string): void {
+    const q = this.queues.get(threadId)
+    this.queues.delete(threadId)
+    const t = this.threads.get(threadId)
+    if (!t || !q?.length) return
+    const ids = new Set(q.map((m) => m.itemId))
+    t.items = t.items.filter((i) => !ids.has(i.id))
+    this.emit({ type: 'reset', threadId, items: t.items })
+    saveThread(t)
   }
 
   async compact(threadId: string): Promise<void> {

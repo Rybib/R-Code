@@ -242,7 +242,7 @@ function PlanCard({ threadId }: { threadId: string }): React.JSX.Element {
         {open ? <ChevronDown size={13} className="text-fg-3" /> : <ChevronUp size={13} className="text-fg-3" />}
         <CircleCheck size={13} className={done === plan.length ? 'text-ok' : 'text-fg-3'} />
         <span className="font-medium">
-          {done === plan.length ? `Completed ${done} of ${plan.length} steps` : current ? current.text : `${done} of ${plan.length} steps done`}
+          {done === plan.length ? `Completed ${done} of ${plan.length} steps` : current ? (current.active ?? current.text) : `${done} of ${plan.length} steps done`}
         </span>
         {done < plan.length && (
           <span className="ml-auto text-fg-4">
