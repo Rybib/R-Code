@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { AgentStatus, ModelOption, PermissionMode, Settings, ToolKind } from '@shared/types'
-import { jsonLines } from '../env'
+import { jsonLines, nodeBinary } from '../env'
 import { dataPath } from '../store'
 import { piToolsJson } from '../bridge'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
@@ -34,7 +34,7 @@ export function piVersion(): string {
 /** Command + env to launch the bundled Pi CLI with Electron's Node runtime. */
 export function piCommand(): { command: string; args: string[]; env: Record<string, string> } {
   return {
-    command: process.execPath,
+    command: nodeBinary(),
     args: [join(piPackageDir(), 'dist/bundle/cli.js')],
     env: { ELECTRON_RUN_AS_NODE: '1', PI_SKIP_VERSION_CHECK: '1', PI_TELEMETRY: '0' }
   }

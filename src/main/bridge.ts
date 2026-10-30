@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { AgentId } from '@shared/types'
 import type { BridgeInfo } from './agents/base'
+import { nodeBinary } from './env'
 import { dataPath, getSettings } from './store'
 import { getTool, toolsFor, type ToolDef, type ToolResult } from './tools/registry'
 
@@ -172,5 +173,5 @@ export async function startBridge(threadInfo: (threadId: string) => ThreadInfo):
   server.headersTimeout = 0
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as any).port
-  return { url: `http://127.0.0.1:${port}`, token, mcpScript: '', piExtension, nodeBinary: process.execPath, server }
+  return { url: `http://127.0.0.1:${port}`, token, mcpScript: '', piExtension, nodeBinary: nodeBinary(), server }
 }

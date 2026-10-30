@@ -178,6 +178,8 @@ export interface Settings {
   defaultAgent: AgentId
   defaultModels: Partial<Record<AgentId, string>>
   favoriteModels: string[]
+  /** `agent:modelId` keys left out of the model switcher. */
+  hiddenModels: string[]
   defaultPermissionMode: PermissionMode
   sendWithEnter: boolean
   // orchestration
@@ -219,6 +221,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultAgent: 'claude',
   defaultModels: {},
   favoriteModels: [],
+  hiddenModels: [],
   defaultPermissionMode: 'acceptEdits',
   sendWithEnter: true,
   shareContextAcrossAgents: true,

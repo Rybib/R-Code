@@ -1,7 +1,7 @@
 import { execFile, spawn, type SpawnOptions } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // GUI apps on macOS launch with a minimal PATH, so the CLIs the user installed via
 // Homebrew, npm or the native installers are invisible. Like T3 Code, we read the
@@ -57,6 +57,18 @@ export function ensurePathEntries(): void {
   const parts = (process.env.PATH || '').split(':').filter(Boolean)
   for (const p of EXTRA_PATHS) if (!parts.includes(p)) parts.push(p)
   process.env.PATH = parts.join(':')
+}
+
+/**
+ * Binary for running Node scripts with ELECTRON_RUN_AS_NODE. On macOS a process started from
+ * the app's main executable checks in as a foreground app, which puts a bouncing icon in the
+ * Dock. The Helper executable is marked LSUIElement, so it runs invisibly (VS Code does the same).
+ */
+export function nodeBinary(): string {
+  if (process.platform !== 'darwin') return process.execPath
+  const exe = basename(process.execPath)
+  const helper = join(process.execPath, '../../Frameworks', `${exe} Helper.app`, 'Contents/MacOS', `${exe} Helper`)
+  return existsSync(helper) ? helper : process.execPath
 }
 
 export function which(cmd: string): string | undefined {

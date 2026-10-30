@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
-import { Check, Download, KeyRound, Plus, Play, RefreshCw, Trash2, Server, Cpu } from 'lucide-react'
+import { Check, Download, Eye, EyeOff, KeyRound, Plus, Play, RefreshCw, Search, Star, Trash2, Server, Cpu } from 'lucide-react'
+import { AGENT_IDS, AGENT_LABELS, type ModelOption } from '@shared/types'
+import { AgentIcon } from '../components/ui'
+import { modelKey } from '../components/ModelPicker'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { Button, Card, Row, Select, Spinner, StatusDot, TextInput, Toggle } from '../components/ui'
@@ -357,6 +360,101 @@ function EndpointsCard(): React.JSX.Element {
   )
 }
 
+/** Choose which models appear in the model switcher, and which are pinned as favorites. */
+function SwitcherCard(): React.JSX.Element {
+  const s = useStore((st) => st.settings)
+  const setSettings = useStore((st) => st.setSettings)
+  const models = useStore((st) => st.models)
+  const loadModels = useStore((st) => st.loadModels)
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const hidden = useMemo(() => new Set(s.hiddenModels ?? []), [s.hiddenModels])
+  const favs = useMemo(() => new Set(s.favoriteModels), [s.favoriteModels])
+
+  useEffect(() => {
+    for (const a of s.linkedAgents) if (!models[a]) void loadModels(a)
+  }, [s.linkedAgents, models, loadModels])
+
+  const setHidden = (keys: string[], hide: boolean): void => {
+    const next = new Set(hidden)
+    for (const k of keys) hide ? next.add(k) : next.delete(k)
+    void setSettings({ hiddenModels: [...next], favoriteModels: hide ? s.favoriteModels.filter((k) => !keys.includes(k)) : s.favoriteModels })
+  }
+  const toggleFav = (m: ModelOption): void => {
+    const k = modelKey(m)
+    void setSettings({ favoriteModels: favs.has(k) ? s.favoriteModels.filter((x) => x !== k) : [...s.favoriteModels, k], hiddenModels: (s.hiddenModels ?? []).filter((x) => x !== k) })
+  }
+
+  const agents = AGENT_IDS.filter((a) => s.linkedAgents.includes(a))
+  return (
+    <Card
+      title="Model switcher"
+      subtitle={`Choose which models show up when you switch models in a chat. ${hidden.size ? `${hidden.size} hidden.` : 'All models are shown.'} Starred models are pinned to the top.`}
+      actions={
+        hidden.size > 0 ? (
+          <Button size="sm" onClick={() => setHidden([...hidden], false)}>
+            Show all
+          </Button>
+        ) : undefined
+      }
+    >
+      <div className="mb-2 flex h-8 items-center gap-2 rounded-lg bg-field px-2.5">
+        <Search size={13} className="text-fg-3" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter models…" className="selectable flex-1 bg-transparent text-[12.5px] text-fg outline-none placeholder:text-fg-4" />
+      </div>
+      <div className="max-h-[360px] overflow-y-auto">
+        {agents.map((agent) => {
+          const list = (models[agent] ?? []).filter((m) => !q || m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q))
+          const keys = list.map(modelKey)
+          const allHidden = keys.length > 0 && keys.every((k) => hidden.has(k))
+          return (
+            <div key={agent} className="mb-2">
+              <div className="flex items-center gap-2 px-1 py-1.5">
+                <AgentIcon agent={agent} size={13} />
+                <span className="text-[12px] font-medium text-fg-2">{AGENT_LABELS[agent]}</span>
+                <span className="text-[11.5px] text-fg-4">{models[agent] ? `${keys.filter((k) => !hidden.has(k)).length} of ${keys.length} shown` : 'Loading…'}</span>
+                <div className="flex-1" />
+                {keys.length > 1 && (
+                  <button onClick={() => setHidden(keys, !allHidden)} className="text-[11.5px] text-fg-3 hover:text-fg">
+                    {allHidden ? 'Show all' : 'Hide all'}
+                  </button>
+                )}
+              </div>
+              {list.map((m) => {
+                const k = modelKey(m)
+                const off = hidden.has(k)
+                return (
+                  <div key={k} className="group flex items-center gap-2 rounded-lg px-1 py-1 hover:bg-raised-2/60">
+                    <span className={clsx('min-w-0 flex-1 transition-opacity', off && 'opacity-40')}>
+                      <span className="block truncate text-[12.5px] text-fg">{m.label}</span>
+                      {m.label !== m.id && <span className="block truncate font-mono text-[10.5px] text-fg-4">{m.id}</span>}
+                    </span>
+                    {m.local && <span className={clsx('rounded bg-ok/15 px-1.5 py-px text-[10.5px] font-medium text-ok', off && 'opacity-40')}>local</span>}
+                    <button
+                      title={favs.has(k) ? 'Remove from favorites' : 'Add to favorites'}
+                      onClick={() => toggleFav(m)}
+                      className={clsx('flex h-6 w-6 items-center justify-center rounded-md hover:bg-frame-active', favs.has(k) ? 'text-warn' : 'text-fg-4 hover:text-fg-2')}
+                    >
+                      <Star size={12} fill={favs.has(k) ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      title={off ? 'Show in the model switcher' : 'Hide from the model switcher'}
+                      onClick={() => setHidden([k], !off)}
+                      className={clsx('flex h-6 w-6 items-center justify-center rounded-md hover:bg-frame-active', off ? 'text-fg-4 hover:text-fg-2' : 'text-fg-2 hover:text-fg')}
+                    >
+                      {off ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 export function ModelsPage(): React.JSX.Element {
   const s = useStore((st) => st.settings)
   const setSettings = useStore((st) => st.setSettings)
@@ -365,6 +463,7 @@ export function ModelsPage(): React.JSX.Element {
   return (
     <>
       <PageTitle title="Models & Providers" subtitle="Everything that isn't Claude Code or Codex runs through R-Code's built-in Pi agent — local models, your own servers, and any cloud provider." />
+      <SwitcherCard />
       <OllamaCard />
       <KeysCard />
       <EndpointsCard />

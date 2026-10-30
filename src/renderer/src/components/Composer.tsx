@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { ArrowUp, Mic, Paperclip, Square, X, Loader2 } from 'lucide-react'
+import { ArrowUp, Check, Mic, Paperclip, Square, X, Loader2 } from 'lucide-react'
 import { AGENT_LABELS, type AgentId, type ImageAttachment, type PermissionMode } from '@shared/types'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { ModelPicker, PermissionPicker, type Selection } from './ModelPicker'
 import { EffortControl } from './EffortSlider'
+import { VoiceWave } from './VoiceWave'
 import { cancelRecording, startRecording, stopRecordingAndTranscribe, useVoice } from '../voice/voice'
 
 const NO_IMAGES: ImageAttachment[] = []
@@ -36,7 +37,6 @@ export function Composer({
   const recording = useVoice((s) => s.recording)
   const transcribing = useVoice((s) => s.transcribing)
   const level = useVoice((s) => s.level)
-  const sttStatus = useVoice((s) => s.stt)
   const ref = useRef<HTMLTextAreaElement>(null)
   const [dragging, setDragging] = useState(false)
   const [voiceError, setVoiceError] = useState<string | null>(null)
@@ -169,6 +169,7 @@ export function Composer({
           ))}
         </div>
       )}
+      {(recording || transcribing) && <VoiceWave onCancel={cancelRecording} />}
       <textarea
         ref={ref}
         value={text}
@@ -183,7 +184,10 @@ export function Composer({
           }
         }}
         placeholder={placeholder}
-        className="selectable block max-h-[280px] min-h-[46px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[14.5px] leading-[1.5] text-fg outline-none placeholder:text-fg-4"
+        className={clsx(
+          'selectable block max-h-[280px] min-h-[46px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[14.5px] leading-[1.5] text-fg outline-none placeholder:text-fg-4',
+          (recording || transcribing) && 'hidden'
+        )}
       />
       <div className="flex items-center gap-1 px-2 pb-2">
         <button
@@ -200,13 +204,10 @@ export function Composer({
             {voiceError}
           </span>
         )}
-        {sttStatus.status === 'loading' && (recording || transcribing) && (
-          <span className="mr-1 text-[11.5px] text-fg-3">Loading Whisper {Math.round(sttStatus.progress * 100)}%</span>
-        )}
         <ModelPicker value={selection} onChange={onSelection} />
         <EffortControl value={selection} onChange={onSelection} />
         <button
-          title={recording ? 'Stop and transcribe (⌥Space)' : 'Dictate with Whisper (⌥Space)'}
+          title={recording ? 'Done — transcribe (⌥Space)' : 'Dictate with Whisper (⌥Space)'}
           onClick={() => void toggleMic()}
           disabled={transcribing}
           className={clsx(
@@ -215,7 +216,7 @@ export function Composer({
           )}
           style={recording ? { transform: `scale(${1 + level * 0.18})` } : undefined}
         >
-          {transcribing ? <Loader2 size={14} className="animate-spin" /> : <Mic size={14} />}
+          {transcribing ? <Loader2 size={14} className="animate-spin" /> : recording ? <Check size={14} strokeWidth={2.6} /> : <Mic size={14} />}
         </button>
         {running && !canSend ? (
           <button title="Stop (Esc)" onClick={onStop} className="flex h-7 w-7 items-center justify-center rounded-full bg-fg text-panel transition-transform active:scale-90">

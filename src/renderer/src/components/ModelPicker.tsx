@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Check, ChevronDown, Cpu, Search, Star, Gauge, Settings2 } from 'lucide-react'
+import { Check, ChevronDown, Cpu, EyeOff, Search, Star, Gauge, Settings2 } from 'lucide-react'
 import { AGENT_IDS, AGENT_LABELS, PERMISSION_LABELS, type AgentId, type ModelOption, type PermissionMode } from '@shared/types'
 import { useStore } from '../store'
 import { AgentIcon, MenuItem, Popover, Spinner } from './ui'
@@ -19,6 +19,8 @@ export function modelLabel(models: ModelOption[] | undefined, id: string, agent?
   const slash = id.indexOf('/')
   return slash > 0 ? id.slice(slash + 1) : id
 }
+
+export const modelKey = (m: { agent: AgentId; id: string }): string => `${m.agent}:${m.id}`
 
 export const AGENT_BLURB: Record<AgentId, string> = {
   claude: 'Anthropic · your Claude Code CLI',
@@ -55,22 +57,36 @@ export function ModelPicker({
   const label = modelLabel(models[value.agent], value.model, value.agent)
   const q = query.trim().toLowerCase()
 
+  // Hidden models stay out of the switcher, except the one this chat is using right now.
+  const hidden = useMemo(() => new Set(settings.hiddenModels ?? []), [settings.hiddenModels])
+  const shown = (m: ModelOption): boolean => !hidden.has(modelKey(m)) || (m.agent === value.agent && m.id === value.model)
+  const hiddenCount = useMemo(
+    () => AGENT_IDS.reduce((n, a) => n + (models[a] ?? []).filter((m) => hidden.has(modelKey(m))).length, 0),
+    [models, hidden]
+  )
+
   const groups = useMemo(() => {
     return AGENT_IDS.map((agent) => {
-      const list = (models[agent] ?? []).filter((m) => !q || m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q) || (m.provider ?? '').includes(q))
+      const list = (models[agent] ?? []).filter(
+        (m) => shown(m) && (!q || m.label.toLowerCase().includes(q) || m.id.toLowerCase().includes(q) || (m.provider ?? '').includes(q))
+      )
       return { agent, list }
     })
-  }, [models, q])
+  }, [models, q, hidden, value.agent, value.model])
 
   const favorites = useMemo(() => {
     const all = AGENT_IDS.flatMap((a) => models[a] ?? [])
     return settings.favoriteModels
-      .map((key) => all.find((m) => `${m.agent}:${m.id}` === key))
-      .filter((m): m is ModelOption => !!m && (!q || m.label.toLowerCase().includes(q)))
-  }, [models, settings.favoriteModels, q])
+      .map((key) => all.find((m) => modelKey(m) === key))
+      .filter((m): m is ModelOption => !!m && shown(m) && (!q || m.label.toLowerCase().includes(q)))
+  }, [models, settings.favoriteModels, q, hidden, value.agent, value.model])
+
+  const hide = (m: ModelOption): void => {
+    void setSettings({ hiddenModels: [...(settings.hiddenModels ?? []), modelKey(m)], favoriteModels: settings.favoriteModels.filter((k) => k !== modelKey(m)) })
+  }
 
   const toggleFav = (m: ModelOption): void => {
-    const key = `${m.agent}:${m.id}`
+    const key = modelKey(m)
     const favs = settings.favoriteModels.includes(key) ? settings.favoriteModels.filter((k) => k !== key) : [...settings.favoriteModels, key]
     void setSettings({ favoriteModels: favs })
   }
@@ -83,7 +99,7 @@ export function ModelPicker({
 
   const row = (m: ModelOption): React.JSX.Element => {
     const selected = m.agent === value.agent && m.id === value.model
-    const fav = settings.favoriteModels.includes(`${m.agent}:${m.id}`)
+    const fav = settings.favoriteModels.includes(modelKey(m))
     return (
       <div key={`${m.agent}:${m.id}`} className={clsx('group flex items-center rounded-lg hover:bg-frame-hover', selected && 'bg-frame-hover')}>
         <button onClick={() => pick(m)} className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-left">
@@ -96,6 +112,15 @@ export function ModelPicker({
           {m.agent === 'pi' && m.provider && !m.local && <span className="text-[11px] text-fg-4">{m.provider}</span>}
           {selected && <Check size={14} className="shrink-0 text-accent" />}
         </button>
+        {!selected && (
+          <button
+            title="Hide from the model switcher (bring it back in Settings → Models)"
+            onClick={() => hide(m)}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-fg-4 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-frame-active hover:text-fg-2"
+          >
+            <EyeOff size={12} />
+          </button>
+        )}
         <button
           title={fav ? 'Remove from favorites' : 'Add to favorites'}
           onClick={() => toggleFav(m)}
@@ -169,6 +194,15 @@ export function ModelPicker({
             )
           })}
         </div>
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => (setOpen(false), openSettings('models'))}
+            className="flex w-full items-center gap-1.5 border-t border-line-soft px-3 py-1.5 text-left text-[11.5px] text-fg-4 hover:text-fg-2"
+          >
+            <EyeOff size={11} />
+            {hiddenCount} hidden {hiddenCount === 1 ? 'model' : 'models'} · Manage
+          </button>
+        )}
         {current?.efforts && current.efforts.length > 1 && (
           <div className="border-t border-line-soft px-1.5 pt-2.5 pb-1">
             <div className="mb-1.5 flex items-center gap-1.5 px-1">

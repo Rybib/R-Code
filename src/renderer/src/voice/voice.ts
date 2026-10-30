@@ -169,6 +169,20 @@ let recorder: MediaRecorder | null = null
 let chunks: Blob[] = []
 let meterRaf = 0
 let meterCtx: AudioContext | null = null
+let meterAnalyser: AnalyserNode | null = null
+
+/** Live analyser for the microphone while recording (null otherwise); used to draw the waveform. */
+export function getAnalyser(): AnalyserNode | null {
+  return meterAnalyser
+}
+
+// Dev builds only: drive the recording UI from any audio source (e.g. a test tone) without a mic.
+if (import.meta.env.DEV) {
+  ;(window as any).__voiceTest = {
+    start: (analyser: AnalyserNode) => ((meterAnalyser = analyser), useVoice.setState({ recording: true })),
+    stop: () => ((meterAnalyser = null), useVoice.setState({ recording: false, level: 0 }))
+  }
+}
 
 export async function startRecording(model: WhisperModel): Promise<void> {
   if (useVoice.getState().recording) return
@@ -185,6 +199,7 @@ export async function startRecording(model: WhisperModel): Promise<void> {
   const analyser = meterCtx.createAnalyser()
   analyser.fftSize = 512
   meterCtx.createMediaStreamSource(media).connect(analyser)
+  meterAnalyser = analyser
   const buf = new Uint8Array(analyser.fftSize)
   const tick = (): void => {
     analyser.getByteTimeDomainData(buf)
@@ -201,6 +216,7 @@ function cleanupRecording(): void {
   cancelAnimationFrame(meterRaf)
   void meterCtx?.close()
   meterCtx = null
+  meterAnalyser = null
   media?.getTracks().forEach((t) => t.stop())
   media = null
   recorder = null
