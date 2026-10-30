@@ -5,6 +5,7 @@ import type {
   InstallLogEvent,
   ModelOption,
   NewThreadOptions,
+  PlanUsage,
   Project,
   SendOptions,
   Settings,
@@ -44,6 +45,7 @@ export const api = {
   send: (id: string, opts: SendOptions) => r().invoke<void>('threads:send', id, opts),
   interrupt: (id: string) => r().invoke<void>('threads:interrupt', id),
   compact: (id: string) => r().invoke<void>('threads:compact', id),
+  usage: (agent: AgentId, force?: boolean) => r().invoke<PlanUsage | null>('usage:get', agent, force),
   continueFresh: (id: string, summary?: string) => r().invoke<Thread>('threads:continueFresh', id, summary),
   respondApproval: (requestId: string, decision: 'approve' | 'approveSession' | 'deny') => r().invoke<void>('approvals:respond', requestId, decision),
 

@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Globe, Smartphone, ChevronDown, CircleCheck, Circle, FolderOpen, GitBranch, PanelLeft, Plus, X, Loader, Minimize2, Sparkles, FolderPlus, Home, ChevronUp } from 'lucide-react'
+import { Globe, Smartphone, ChevronDown, CircleCheck, Circle, FolderOpen, GitBranch, PanelLeft, Plus, X, Loader, Sparkles, FolderPlus, Home, ChevronUp } from 'lucide-react'
 import type { PermissionMode } from '@shared/types'
 import { useStore, defaultModelFor } from '../store'
 import { api } from '../lib/api'
 import { Composer } from './Composer'
 import { Timeline } from './Timeline'
+import { ContextMeter, UsageMeter } from './Metrics'
 import { ModelPicker, type Selection } from './ModelPicker'
 import { AgentIcon, IconButton, Logo, MenuItem, Popover } from './ui'
 
@@ -16,9 +17,10 @@ export function TabBar(): React.JSX.Element {
   const view = useStore((s) => s.view)
   const collapsed = useStore((s) => s.sidebarCollapsed)
   const set = useStore((s) => s.set)
-  const openThread = useStore((s) => s.openThread)
+  const activeTab = useStore((s) => s.activeTab)
+  const selectTab = useStore((s) => s.selectTab)
   const closeTab = useStore((s) => s.closeTab)
-  const newConversation = useStore((s) => s.newConversation)
+  const newTab = useStore((s) => s.newTab)
   const active = activeId ? threads[activeId] : undefined
   const panel = useStore((s) => s.panel)
 
@@ -36,41 +38,41 @@ export function TabBar(): React.JSX.Element {
           </div>
         ) : (
           <>
-            {tabs.map((id) => {
-              const t = threads[id]
-              if (!t) return null
-              const isActive = id === activeId
+            {tabs.map((id, i) => {
+              const t = id ? threads[id] : undefined
+              const isActive = i === activeTab
               return (
                 <div
-                  key={id}
+                  key={`${i}:${id ?? 'new'}`}
                   onMouseDown={(e) => {
-                    if (e.button === 1) closeTab(id)
+                    if (e.button === 1) closeTab(i)
                   }}
                   className={clsx(
                     'no-drag group relative flex h-[34px] max-w-[220px] min-w-[120px] items-center gap-2 rounded-t-[10px] pr-1.5 pl-3 text-[12.5px] transition-colors duration-100',
                     isActive ? 'bg-panel text-fg' : 'text-fg-3 hover:bg-frame-hover hover:text-fg-2'
                   )}
                 >
-                  <button className="flex min-w-0 flex-1 items-center gap-2" onClick={() => void openThread(id)}>
-                    {t.running ? <Loader size={12} className="shrink-0 animate-spin" /> : <AgentIcon agent={t.agent} size={12} className="shrink-0" />}
-                    <span className="truncate">{t.title}</span>
+                  <button className="flex min-w-0 flex-1 items-center gap-2" onClick={() => selectTab(i)}>
+                    {t ? (
+                      t.running ? <Loader size={12} className="shrink-0 animate-spin" /> : <AgentIcon agent={t.agent} size={12} className="shrink-0" />
+                    ) : (
+                      <Sparkles size={12} className={clsx('shrink-0', isActive ? 'text-accent' : '')} />
+                    )}
+                    <span className="truncate">{t ? t.title : 'New conversation'}</span>
                   </button>
-                  <button
-                    onClick={() => closeTab(id)}
-                    className={clsx('flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-3 hover:bg-frame-active hover:text-fg', isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}
-                  >
-                    <X size={11} />
-                  </button>
+                  {(tabs.length > 1 || t) && (
+                    <button
+                      title="Close tab (⌘W)"
+                      onClick={() => closeTab(i)}
+                      className={clsx('flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-3 hover:bg-frame-active hover:text-fg', isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
                 </div>
               )
             })}
-            {!activeId && (
-              <div className="no-drag flex h-[34px] min-w-[150px] items-center gap-2 rounded-t-[10px] bg-panel pr-3 pl-3 text-[12.5px] text-fg">
-                <Sparkles size={12} className="text-accent" />
-                New conversation
-              </div>
-            )}
-            <IconButton title="New conversation (⌘N)" className="mb-[3px] ml-1" onClick={() => newConversation()}>
+            <IconButton title="New tab (⌘T)" className="mb-[3px] ml-1" onClick={() => newTab()}>
               <Plus size={15} />
             </IconButton>
           </>
@@ -145,6 +147,9 @@ export function Hero(): React.JSX.Element {
         </Popover>
       </div>
       <div className="relative mx-auto w-full max-w-[760px] px-6 pb-7">
+        <div className="mb-2 flex justify-end empty:hidden">
+          <UsageMeter agent={sel.agent} />
+        </div>
         <Composer
           threadKey="new"
           autoFocus
@@ -217,6 +222,7 @@ export function ChatView({ threadId }: { threadId: string }): React.JSX.Element 
             </div>
           )}
           <div className="flex-1" />
+          <UsageMeter agent={selection.agent} />
           {pct !== null && <ContextMeter pct={pct} tokens={usage!.contextTokens!} window={usage!.contextWindow!} threadId={threadId} running={!!thread.running} cost={usage?.costUsd} />}
         </div>
         <Composer
@@ -231,50 +237,6 @@ export function ChatView({ threadId }: { threadId: string }): React.JSX.Element 
         />
       </div>
     </div>
-  )
-}
-
-function ContextMeter({ pct, tokens, window, threadId, running, cost }: { pct: number; tokens: number; window: number; threadId: string; running: boolean; cost?: number }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const btn = useRef<HTMLButtonElement>(null)
-  const openThread = useStore((s) => s.openThread)
-  const r = 7
-  const c = 2 * Math.PI * r
-  const color = pct > 85 ? 'var(--danger)' : pct > 65 ? 'var(--warn)' : 'var(--text-3)'
-  return (
-    <>
-      <button ref={btn} onClick={() => setOpen(true)} title="Context usage" className="flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11.5px] text-fg-3 hover:bg-raised-2 hover:text-fg-2">
-        <svg width="16" height="16" viewBox="0 0 18 18" className="-rotate-90">
-          <circle cx="9" cy="9" r={r} fill="none" stroke="var(--line)" strokeWidth="2.2" />
-          <circle cx="9" cy="9" r={r} fill="none" stroke={color} strokeWidth="2.2" strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} strokeLinecap="round" />
-        </svg>
-        {Math.round(pct)}%
-      </button>
-      <Popover anchor={btn.current} open={open} onClose={() => setOpen(false)} placement="top-end" className="w-72 p-3">
-        <div className="text-[13px] font-medium text-fg">Context window</div>
-        <div className="mt-1 text-[12px] text-fg-3">
-          {Math.round(tokens / 1000)}k of {Math.round(window / 1000)}k tokens used{cost ? ` · $${cost.toFixed(2)} this chat` : ''}
-        </div>
-        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-line">
-          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
-        </div>
-        <div className="mt-3 flex flex-col gap-1">
-          <MenuItem icon={<Minimize2 size={14} />} onClick={() => (setOpen(false), void api.compact(threadId))}>
-            <span className={clsx(running && 'opacity-50')}>Compact now</span>
-          </MenuItem>
-          <MenuItem
-            icon={<Sparkles size={14} />}
-            onClick={async () => {
-              setOpen(false)
-              const t = await api.continueFresh(threadId)
-              await openThread(t.id)
-            }}
-          >
-            Continue in a fresh chat
-          </MenuItem>
-        </div>
-      </Popover>
-    </>
   )
 }
 

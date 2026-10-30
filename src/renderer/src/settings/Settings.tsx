@@ -257,7 +257,8 @@ function OrchestrationPage(): React.JSX.Element {
 
 function ShortcutsPage(): React.JSX.Element {
   const rows: [string, string][] = [
-    ['New conversation', '⌘N'],
+    ['New conversation (in this tab)', '⌘N'],
+    ['New tab', '⌘T'],
     ['Search conversations', '⌘K'],
     ['Toggle sidebar', '⌘B'],
     ['Settings', '⌘,'],

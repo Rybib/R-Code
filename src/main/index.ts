@@ -22,6 +22,7 @@ import {
 } from './installer'
 import { clearPiModelCache } from './agents/pi'
 import { startDevAutomation } from './dev-automation'
+import { getUsage, refreshUsageSoon, startUsage } from './usage'
 import { registerTools } from './tools/registry'
 import { BrowserController, browserTools } from './tools/browser'
 import { webTools } from './tools/web'
@@ -275,6 +276,32 @@ function registerIpc(): void {
   handle('browser:devtools', () => browser.view?.webContents.openDevTools({ mode: 'detach' }))
 
   // iOS Simulator panel
+  // Site icon for hosts without /favicon.ico: read the <link rel="icon"> from the site's homepage.
+  const favicons = new Map<string, Promise<string | null>>()
+  handle('favicon:resolve', (host: string) => {
+    if (!/^[a-z0-9.-]+$/i.test(host)) return null
+    if (!favicons.has(host)) {
+      favicons.set(
+        host,
+        (async () => {
+          try {
+            const res = await fetch(`https://${host}/`, { headers: { 'user-agent': 'R-Code/0.1 (+desktop coding agent)', accept: 'text/html' }, signal: AbortSignal.timeout(6000) })
+            const html = (await res.text()).slice(0, 300_000)
+            // Attributes may be quoted or not (e.g. <link rel=icon href=/assets/favicon.ico>).
+            const tags = [...html.matchAll(/<link\b[^>]*>/gi)].map((m) => m[0]).filter((t) => /\brel=(?:"[^"]*\bicon\b[^"]*"|'[^']*\bicon\b[^']*'|[^\s>]*icon[^\s>]*)/i.test(t))
+            const pick = tags.find((t) => !/mask-icon/i.test(t)) ?? tags[0]
+            const m = pick?.match(/\bhref=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i)
+            const href = m?.[1] ?? m?.[2] ?? m?.[3]
+            return href ? new URL(href, res.url).href : null
+          } catch {
+            return null
+          }
+        })()
+      )
+    }
+    return favicons.get(host)
+  })
+  handle('usage:get', (agent: AgentId, force?: boolean) => getUsage(agent, force ? 0 : 60_000))
   handle('ios:devices', () => listDevices())
   handle('ios:boot', (udid: string) => bootDevice(udid))
   handle('ios:shutdown', (udid: string) => shutdownDevice(udid))
@@ -350,7 +377,7 @@ app.whenReady().then(async () => {
     registerTools([
       ...orchestrator.tools(),
       ...browserTools(browser, send),
-      ...webTools(getSettings, browser, send),
+      ...webTools(getSettings, browser),
       ...iosTools(send, (id) => orchestrator.cwdFor(id))
     ])
   )
@@ -364,6 +391,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media' || permission === 'clipboard-read' || permission === 'clipboard-sanitized-write')
 
   registerIpc()
+  startUsage(send)
   buildMenu()
   createWindow()
   if (!app.isPackaged && process.env.RCODE_AUTOMATION_PORT) startDevAutomation(() => win, Number(process.env.RCODE_AUTOMATION_PORT), () => browser.view)

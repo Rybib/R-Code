@@ -51,17 +51,21 @@ export function App(): React.JSX.Element {
       }
       if (e.metaKey && e.key === 'w') {
         const s = useStore.getState()
-        if (s.activeId && s.view === 'chat') {
+        if (s.view === 'chat' && (s.tabs.length > 1 || s.activeId)) {
           e.preventDefault()
-          s.closeTab(s.activeId)
+          s.closeTab(s.activeTab)
         }
+      }
+      if (e.metaKey && e.key.toLowerCase() === 't') {
+        e.preventDefault()
+        useStore.getState().newTab()
       }
       if (e.metaKey && /^[1-9]$/.test(e.key)) {
         const s = useStore.getState()
-        const id = s.tabs[Number(e.key) - 1]
-        if (id) {
+        const i = Number(e.key) - 1
+        if (i < s.tabs.length) {
           e.preventDefault()
-          void s.openThread(id)
+          s.selectTab(i)
         }
       }
     }

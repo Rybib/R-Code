@@ -33,6 +33,7 @@ import { api } from '../lib/api'
 import { useStore } from '../store'
 import { speak, stopSpeaking, useVoice } from '../voice/voice'
 import { DiffCounts, FileIcon } from './FileIcon'
+import { FaviconStack, SourceList, sitesOf, type Site } from './Favicon'
 import { diffStats } from '@shared/diffstat'
 
 function statsOf(t: ToolItem): { added: number; removed: number } {
@@ -340,6 +341,11 @@ function ToolGroup({ items, childMap, live }: { items: ToolItem[]; childMap: Rec
   const current = [...items].reverse().find((t) => t.status === 'running')
   const edits = editedFiles(items)
   const rest = summarize(items, true)
+  const sites = useMemo(() => {
+    const all = new Map<string, Site>()
+    for (const t of items) for (const site of sitesOf(t)) if (!all.has(site.host)) all.set(site.host, site)
+    return [...all.values()]
+  }, [items])
   return (
     <div className="fade-up">
       <button onClick={() => setOpen(!open)} className="group flex w-full items-center gap-2 py-0.5 text-left text-[13px] text-fg-3 transition-colors hover:text-fg-2">
@@ -353,6 +359,7 @@ function ToolGroup({ items, childMap, live }: { items: ToolItem[]; childMap: Rec
           <span className="flex min-w-0 shrink-0 items-center gap-1.5">
             <EditSummary files={edits} />
             {rest && <span>{edits.length ? `· ${rest.charAt(0).toLowerCase()}${rest.slice(1)}` : rest}</span>}
+            <FaviconStack sites={sites} size={13} max={5} />
           </span>
         )}
         {failed > 0 && !running && <span className="text-danger/80">· {failed} failed</span>}
@@ -372,6 +379,7 @@ function ToolGroup({ items, childMap, live }: { items: ToolItem[]; childMap: Rec
 function ToolRow({ item, childItems, childMap }: { item: ToolItem; childItems?: TimelineItem[]; childMap: Record<string, TimelineItem[]> }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const Icon = KIND_ICON[item.toolKind] ?? Wrench
+  const sites = useMemo(() => sitesOf(item), [item])
   const hasBody = !!(item.output || item.diff || (item.detail && item.detail.includes('\n')) || childItems?.length)
   return (
     <div className="rounded-lg">
@@ -389,6 +397,8 @@ function ToolRow({ item, childItems, childMap }: { item: ToolItem; childItems?: 
           </span>
         ) : item.file && (item.toolKind === 'edit' || item.toolKind === 'read') ? (
           <FileIcon path={item.file} size={14} className={item.status === 'error' ? 'opacity-50' : ''} />
+        ) : sites.length && item.status !== 'error' ? (
+          <FaviconStack sites={sites} size={14} max={3} />
         ) : (
           <Icon size={13} className={item.status === 'error' ? 'text-danger' : 'text-fg-3'} />
         )}
@@ -401,6 +411,7 @@ function ToolRow({ item, childItems, childMap }: { item: ToolItem; childItems?: 
       </button>
       {open && (
         <div className="mx-2.5 mb-2 flex flex-col gap-2">
+          <SourceList sites={sites} />
           {item.detail && (item.toolKind !== 'command' || item.detail.includes('\n')) && item.toolKind !== 'task' && (
             <pre className="selectable max-h-48 overflow-auto rounded-lg bg-[var(--code-bg)] p-2.5 font-mono text-[11.5px] whitespace-pre-wrap text-fg-2">{item.detail}</pre>
           )}

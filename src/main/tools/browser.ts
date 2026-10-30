@@ -159,6 +159,35 @@ export class BrowserController {
   consoleMessages(): string {
     return this.consoleLog.slice(-60).join('\n') || '(no console messages)'
   }
+
+  private bg: WebContentsView | null = null
+
+  /**
+   * Load a page in a hidden browser (same profile/cookies as the visible one) and read it.
+   * Used for plain web searches and page reads, so they don't pop the browser panel open or
+   * navigate away from whatever the user has there.
+   */
+  async readInBackground<T = { title: string; url: string; elements: string; text: string }>(url: string, settleMs = 0, script = SNAPSHOT_JS): Promise<T> {
+    if (!this.bg || this.bg.webContents.isDestroyed()) {
+      this.bg = new WebContentsView({ webPreferences: { partition: 'persist:rcode-browser', sandbox: true, contextIsolation: true, backgroundThrottling: false } })
+      this.bg.webContents.setAudioMuted(true)
+      this.bg.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    }
+    const wc = this.bg.webContents
+    try {
+      await wc.loadURL(url)
+    } catch (err: any) {
+      if (!/ERR_ABORTED/.test(String(err?.message))) throw err
+    }
+    if (wc.isLoading()) {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 8000)
+        wc.once('did-stop-loading', () => (clearTimeout(t), resolve()))
+      })
+    }
+    if (settleMs) await new Promise((r) => setTimeout(r, settleMs))
+    return wc.executeJavaScript(script, true)
+  }
 }
 
 export function browserTools(b: BrowserController, notify: Notify): ToolDef[] {

@@ -10,8 +10,8 @@ One calm, Poolside-style home for your coding agents on macOS.
   - `suggest_new_chat`: offer a fresh chat seeded with a summary.
   - Claude Code's and Codex's own sub-agents show nested in the timeline.
 - **Built-in browser.** A real Chromium panel that you and the agents share (`browser_open`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_eval`, `browser_console`). Point it at a local dev server.
-- **iOS Simulator + Xcode.** A live Simulator panel with Build & Run. Agents get `ios_build_and_run`, `ios_screenshot`, `ios_tap`, `ios_swipe`, `ios_type_text`, `ios_describe_ui`, `ios_open_url` and `ios_app_logs`. Tap, type and describe need [AXe](https://github.com/cameroncooke/AXe), which you can install with one click in the panel.
-- **Web for the built-in agent:** `search_web` / `fetch_url`. Searches use Brave, Tavily, Ollama or SearXNG when you add a key or URL. With none set, Pi searches in the built-in browser.
+- **iOS Simulator + Xcode.** A live Simulator panel with Build & Run. Agents get `ios_build_and_run`, `ios_screenshot`, `ios_tap`, `ios_swipe`, `ios_type_text`, `ios_describe_ui`, `ios_open_url` and `ios_app_logs`. Tapping, typing and reading the UI use [AXe](https://github.com/cameroncooke/AXe), which ships inside R-Code (`npm run dist` fetches the pinned, checksum-verified release).
+- **Web for the built-in agent:** `search_web` / `fetch_url`. Searches use Brave, Tavily, Ollama or SearXNG when you add a key or URL. With none set, Pi searches in a hidden background browser. Web activity shows the favicons of the sites visited.
 - **On-device voice.**
   - Dictation uses OpenAI Whisper (Tiny, Base, or Small, the default) via transformers.js on WebGPU. Press ⌥Space in any chat.
   - Read-aloud uses Kokoro-82M (Apache-2.0). Models download once from Hugging Face; audio never leaves your Mac.
@@ -68,5 +68,6 @@ Issues and pull requests are welcome. Run `npm run typecheck` before sending a c
 - [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) via kokoro-js
 - [vscode-icons](https://github.com/vscode-icons/vscode-icons) (MIT) for file icons
 - [Lucide](https://lucide.dev) (ISC) for UI icons
+- [AXe](https://github.com/cameroncooke/AXe) (MIT), bundled, for iOS Simulator automation
 
 Claude Code, Codex and Poolside are trademarks of their respective owners. R-Code is an independent project and isn't affiliated with any of them.

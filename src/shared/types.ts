@@ -141,12 +141,33 @@ export interface Thread {
   agentSeenUpTo: Partial<Record<AgentId, number>>
   parentThreadId?: string
   archived?: boolean
+  /** When the chat was settled: done for now, tucked into the sidebar's Settled section. */
+  settledAt?: number
   pinned?: boolean
   plan?: PlanStep[]
   usage?: Usage
   /** Context carried into a fresh chat; prepended to the first prompt. */
   seedContext?: string
   items: TimelineItem[]
+}
+
+/** One subscription rate-limit window, e.g. Claude's 5-hour session or Codex's weekly limit. */
+export interface UsageWindow {
+  id: string
+  label: string
+  /** 0–100 */
+  usedPercent: number
+  /** Epoch ms when the window resets. */
+  resetsAt?: number
+}
+
+/** How much of a Claude Code / Codex subscription is used, as their CLIs report it. */
+export interface PlanUsage {
+  agent: AgentId
+  /** e.g. 'Max', 'Pro', 'Plus' */
+  plan?: string
+  windows: UsageWindow[]
+  fetchedAt: number
 }
 
 export type ThreadSummary = Omit<Thread, 'items'> & { lastText?: string; running?: boolean }

@@ -5,6 +5,7 @@ import type {
   ImageAttachment,
   ModelOption,
   PermissionMode,
+  PlanUsage,
   Project,
   Settings,
   ThreadEvent,
@@ -36,12 +37,17 @@ interface State {
   agentsLoading: boolean
   models: Partial<Record<AgentId, ModelOption[]>>
   installLogs: Record<string, string[]>
+  /** Subscription usage per CLI agent (undefined = not loaded, null = no plan limits). */
+  planUsage: Partial<Record<AgentId, PlanUsage | null>>
   installing: Record<string, boolean>
 
   view: 'chat' | 'settings'
   settingsPage: SettingsPage
+  /** The chat shown in the active tab (null = an empty tab showing the new-chat screen). */
   activeId: string | null
-  tabs: string[]
+  /** Tabs are workspaces: each holds one chat, or is empty (null) until you start or pick one. */
+  tabs: (string | null)[]
+  activeTab: number
   sidebarCollapsed: boolean
   searchOpen: boolean
   draft: Draft
@@ -59,8 +65,13 @@ interface State {
   loadModels(agent: AgentId, refresh?: boolean): Promise<ModelOption[]>
   setSettings(patch: Partial<Settings>): Promise<void>
   applyEvent(ev: ThreadEvent): void
+  /** Show a chat in the current tab (or switch to the tab that already has it). */
   openThread(id: string): Promise<void>
-  closeTab(id: string): void
+  selectTab(index: number): void
+  newTab(): void
+  /** Close a tab by index, or the tab showing a given chat. */
+  closeTab(target: number | string): void
+  /** Empty the current tab so a new conversation can start in it. */
   newConversation(projectPath?: string): void
   setDraft(patch: Partial<Draft>): void
   sendMessage(text: string, images?: ImageAttachment[]): Promise<void>
@@ -71,20 +82,33 @@ interface State {
 
 const TABS_KEY = 'rcode.tabs'
 
-function loadTabs(): { tabs: string[]; active: string | null } {
+function loadTabs(): { tabs: (string | null)[]; activeTab: number } {
   try {
-    return JSON.parse(localStorage.getItem(TABS_KEY) || '') as { tabs: string[]; active: string | null }
+    const saved = JSON.parse(localStorage.getItem(TABS_KEY) || '')
+    if (typeof saved.activeTab === 'number') return saved
+    // Older format: a list of open chats plus the active one (null meant a new-chat tab).
+    const tabs: (string | null)[] = saved.tabs ?? []
+    if (saved.active == null) return { tabs: [...tabs, null], activeTab: tabs.length }
+    return { tabs, activeTab: Math.max(0, tabs.indexOf(saved.active)) }
   } catch {
-    return { tabs: [], active: null }
+    return { tabs: [null], activeTab: 0 }
   }
 }
 
-function saveTabs(tabs: string[], active: string | null): void {
+function saveTabs(tabs: (string | null)[], activeTab: number): void {
   try {
-    localStorage.setItem(TABS_KEY, JSON.stringify({ tabs, active }))
+    localStorage.setItem(TABS_KEY, JSON.stringify({ tabs, activeTab }))
   } catch {
     /* ignore */
   }
+}
+
+/** Normalizes a tab change (always at least one tab), persists it, and derives activeId. */
+function commitTabs(tabs: (string | null)[], activeTab: number): { tabs: (string | null)[]; activeTab: number; activeId: string | null } {
+  if (!tabs.length) tabs = [null]
+  activeTab = Math.min(Math.max(0, activeTab), tabs.length - 1)
+  saveTabs(tabs, activeTab)
+  return { tabs, activeTab, activeId: tabs[activeTab] ?? null }
 }
 
 export function defaultModelFor(settings: Settings, agent: AgentId): string {
@@ -103,11 +127,13 @@ export const useStore = create<State>((set, get) => ({
   agentsLoading: false,
   models: {},
   installLogs: {},
+  planUsage: {},
   installing: {},
   view: 'chat',
   settingsPage: 'general',
   activeId: null,
-  tabs: [],
+  tabs: [null],
+  activeTab: 0,
   sidebarCollapsed: false,
   searchOpen: false,
   draft: { agent: 'claude', model: 'default', permissionMode: 'acceptEdits' },
@@ -125,8 +151,10 @@ export const useStore = create<State>((set, get) => ({
     const threads: Record<string, ThreadSummary> = {}
     for (const t of data.threads) threads[t.id] = t
     const saved = loadTabs()
-    const tabs = saved.tabs.filter((id) => threads[id])
-    const active = saved.active && threads[saved.active] ? saved.active : null
+    const restored = commitTabs(
+      saved.tabs.map((id) => (id && threads[id] ? id : null)),
+      saved.activeTab
+    )
     const s = data.settings
     const agent = s.linkedAgents.includes(s.defaultAgent) ? s.defaultAgent : s.linkedAgents[0] ?? 'claude'
     set({
@@ -136,8 +164,7 @@ export const useStore = create<State>((set, get) => ({
       settings: s,
       projects: data.projects,
       threads,
-      tabs,
-      activeId: active,
+      ...restored,
       draft: {
         agent,
         model: defaultModelFor(s, agent),
@@ -145,7 +172,7 @@ export const useStore = create<State>((set, get) => ({
         projectPath: data.projects[0]?.path
       }
     })
-    if (active) void get().openThread(active)
+    if (restored.activeId) void get().openThread(restored.activeId)
     void get().refreshAgents()
   },
 
@@ -186,10 +213,8 @@ export const useStore = create<State>((set, get) => ({
         set((s) => {
           const threads = { ...s.threads }
           delete threads[ev.threadId]
-          const tabs = s.tabs.filter((t) => t !== ev.threadId)
-          const activeId = s.activeId === ev.threadId ? tabs[tabs.length - 1] ?? null : s.activeId
-          saveTabs(tabs, activeId)
-          return { threads, tabs, activeId }
+          // A deleted chat leaves its tab empty rather than closing it.
+          return { threads, ...commitTabs(s.tabs.map((t) => (t === ev.threadId ? null : t)), s.activeTab) }
         })
         break
       case 'reset':
@@ -222,33 +247,51 @@ export const useStore = create<State>((set, get) => ({
 
   async openThread(id) {
     const s = get()
-    const tabs = s.tabs.includes(id) ? s.tabs : [...s.tabs, id]
-    set({ activeId: id, tabs, view: 'chat' })
-    saveTabs(tabs, id)
+    const existing = s.tabs.indexOf(id)
+    let tabs = [...s.tabs]
+    let target = s.activeTab
+    if (existing < 0) tabs[s.activeTab] = id
+    else if (tabs[s.activeTab] === null && existing !== s.activeTab) {
+      // Picked from an empty tab, but that chat is already open: go there and drop the empty tab.
+      tabs = tabs.filter((_, k) => k !== s.activeTab)
+      target = existing > s.activeTab ? existing - 1 : existing
+    } else target = existing
+    set({ ...commitTabs(tabs, target), view: 'chat' })
     if (!s.items[id]) {
       const t = await api.getThread(id)
       if (t) set((st) => ({ items: { ...st.items, [id]: t.items } }))
     }
   },
 
-  closeTab(id) {
+  selectTab(index) {
+    const id = get().tabs[index]
+    if (id === undefined) return
+    if (id) void get().openThread(id)
+    else set((s) => ({ ...commitTabs(s.tabs, index), view: 'chat' }))
+  },
+
+  newTab() {
+    set((s) => ({ ...commitTabs([...s.tabs, null], s.tabs.length), view: 'chat' }))
+  },
+
+  closeTab(target) {
     set((s) => {
-      const i = s.tabs.indexOf(id)
-      const tabs = s.tabs.filter((t) => t !== id)
-      const activeId = s.activeId === id ? tabs[Math.min(i, tabs.length - 1)] ?? null : s.activeId
-      saveTabs(tabs, activeId)
-      return { tabs, activeId }
+      const i = typeof target === 'number' ? target : s.tabs.indexOf(target)
+      if (i < 0 || i >= s.tabs.length) return {}
+      const tabs = s.tabs.filter((_, k) => k !== i)
+      return commitTabs(tabs, i < s.activeTab ? s.activeTab - 1 : i === s.activeTab ? Math.min(i, tabs.length - 1) : s.activeTab)
     })
   },
 
   newConversation(projectPath) {
     const s = get()
+    const tabs = [...s.tabs]
+    tabs[s.activeTab] = null
     set({
-      activeId: null,
+      ...commitTabs(tabs, s.activeTab),
       view: 'chat',
       draft: { ...s.draft, projectPath: projectPath ?? s.draft.projectPath }
     })
-    saveTabs(s.tabs, null)
   },
 
   setDraft(patch) {
@@ -305,6 +348,9 @@ export const useStore = create<State>((set, get) => ({
 export function wireGlobalEvents(): () => void {
   const offThread = api.onThreadEvent((ev) => useStore.getState().applyEvent(ev))
   const offPanel = window.rcode.on('panel-open', (panel: 'browser' | 'simulator') => useStore.setState({ panel }))
+  const offUsage = window.rcode.on('usage', (u: { agent: AgentId; usage: PlanUsage | null }) =>
+    useStore.setState((s) => ({ planUsage: { ...s.planUsage, [u.agent]: u.usage } }))
+  )
   const offInstall = api.onInstallLog((ev) => {
     useStore.setState((s) => ({
       installLogs: { ...s.installLogs, [ev.agent]: [...(s.installLogs[ev.agent] ?? []).slice(-300), ev.line] },
@@ -315,5 +361,6 @@ export function wireGlobalEvents(): () => void {
     offThread()
     offInstall()
     offPanel()
+    offUsage()
   }
 }

@@ -59,6 +59,13 @@ async function searchApi(settings: Settings, query: string, count: number): Prom
   return null
 }
 
+/** Pulls title / URL / snippet for each organic result off a DuckDuckGo results page. */
+const DDG_RESULTS_JS = `(() => [...document.querySelectorAll('article[data-testid="result"], li[data-layout="organic"]')].map((r) => {
+  const a = r.querySelector('a[data-testid="result-title-a"]') || r.querySelector('h2 a');
+  const snip = r.querySelector('[data-result="snippet"]') || r.querySelector('[data-testid="result-snippet"]');
+  return a ? { title: (a.innerText || '').trim(), url: a.href, snippet: ((snip && snip.innerText) || '').trim().slice(0, 300) } : null;
+}).filter((h) => h && /^https?:/.test(h.url) && !/duckduckgo\\.com/.test(h.url)))()`
+
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
 }
@@ -84,12 +91,12 @@ export function htmlToText(html: string): string {
     .trim()
 }
 
-export function webTools(getSettings: () => Settings, browser: BrowserController, notify: (c: string, p: unknown) => void): ToolDef[] {
+export function webTools(getSettings: () => Settings, browser: BrowserController): ToolDef[] {
   return [
     {
       name: 'search_web',
       description:
-        'Search the web. Returns titles, URLs and snippets. Follow up with fetch_url to read a result. Uses your configured search API, or a normal search in R-Code’s built-in browser.',
+        'Search the web. Returns titles, URLs and snippets. Follow up with fetch_url to read a result. Uses your configured search API, or a normal search in R-Code’s background browser. Does not open the browser panel; use browser_open when the user should see a page.',
       schema: { type: 'object', properties: { query: str('What to search for'), count: num('Number of results (default 8)') }, required: ['query'] },
       agents: ['pi'],
       async run(_ctx, args) {
@@ -99,23 +106,19 @@ export function webTools(getSettings: () => Settings, browser: BrowserController
         if (api && api.hits.length) {
           return { text: `Results from ${api.provider} for "${query}":\n\n` + api.hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join('\n\n') }
         }
-        // No API configured: search in the visible built-in browser like a person would.
-        notify('panel-open', 'browser')
-        await browser.navigate(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`)
-        await new Promise((r) => setTimeout(r, 1200))
-        const snap = await browser.snapshot()
-        const links = snap.elements
-          .split('\n')
-          .filter((l) => l.includes(' link ') && /href=https?:\/\//.test(l) && !/duckduckgo\.com/.test(l))
-          .slice(0, count * 2)
+        // No API configured: run a normal search in R-Code's hidden background browser.
+        const hits = await browser.readInBackground<Hit[]>(`https://duckduckgo.com/?q=${encodeURIComponent(query)}`, 1200, DDG_RESULTS_JS)
+        if (!hits.length) return { text: `No results found for "${query}".`, isError: true }
         return {
-          text: `Searched "${query}" in the built-in browser (tip: add a Brave/Tavily/Ollama search key in Settings → Models & Providers for faster, cleaner results).\n\nLinks:\n${links.join('\n') || '(none found)'}\n\nPage text:\n${snap.text.slice(0, 6000)}`
+          text:
+            `Results for "${query}" (searched in the background browser; add a Brave/Tavily/Ollama key in Settings → Browser, iOS & Web for faster results):\n\n` +
+            hits.slice(0, count).map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join('\n\n')
         }
       }
     },
     {
       name: 'fetch_url',
-      description: 'Fetch a web page (or JSON/text URL) and return its readable text. Set render=true for JavaScript-heavy sites to load it in the built-in browser instead.',
+      description: 'Fetch a web page (or JSON/text URL) and return its readable text. Set render=true for JavaScript-heavy sites to render it in a hidden browser instead. Does not open the browser panel.',
       schema: { type: 'object', properties: { url: str('The URL to read'), render: { type: 'boolean', description: 'Render with the built-in browser' } }, required: ['url'] },
       agents: ['pi'],
       async run(_ctx, args) {
@@ -133,9 +136,7 @@ export function webTools(getSettings: () => Settings, browser: BrowserController
             }
           }
         }
-        notify('panel-open', 'browser')
-        await browser.navigate(url)
-        const snap = await browser.snapshot()
+        const snap = await browser.readInBackground(url, 600)
         return { text: `${snap.url}\n${snap.title}\n\n${snap.text}` }
       }
     }

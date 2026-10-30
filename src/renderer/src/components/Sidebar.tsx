@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
   Archive,
+  CircleCheck,
   ChevronDown,
   FolderOpen,
   FolderPlus,
@@ -14,6 +15,7 @@ import {
   Trash2,
   Bot,
   FolderClosed,
+  RotateCcw,
   X
 } from 'lucide-react'
 import type { ThreadSummary } from '@shared/types'
@@ -36,10 +38,13 @@ export function Sidebar(): React.JSX.Element {
   const [projectsOpen, setProjectsOpen] = useState(true)
   const [showAll, setShowAll] = useState(false)
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
+  const [settledOpen, setSettledOpen] = useState(false)
 
-  const { chats, byProject } = useMemo(() => {
-    const visible = Object.values(threads)
-      .filter((t) => !t.archived && !t.parentThreadId)
+  const { chats, byProject, settled } = useMemo(() => {
+    const all = Object.values(threads).filter((t) => !t.archived && !t.parentThreadId)
+    const settled = all.filter((t) => t.settledAt).sort((a, b) => b.settledAt! - a.settledAt!)
+    const visible = all
+      .filter((t) => !t.settledAt)
       .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt)
     const projectPaths = new Set(projects.map((p) => p.path))
     const byProject: Record<string, ThreadSummary[]> = {}
@@ -48,8 +53,9 @@ export function Sidebar(): React.JSX.Element {
       if (t.projectPath && projectPaths.has(t.projectPath)) (byProject[t.projectPath] ??= []).push(t)
       else chats.push(t)
     }
-    return { chats, byProject }
+    return { chats, byProject, settled }
   }, [threads, projects])
+  const projectName = (path?: string): string | undefined => projects.find((p) => p.path === path)?.name
 
   const shownChats = showAll ? chats : chats.slice(0, CHAT_LIMIT)
 
@@ -117,6 +123,27 @@ export function Sidebar(): React.JSX.Element {
             </div>
           )}
         </div>
+
+        {settled.length > 0 && (
+          <div className="mt-4">
+            <button
+              onClick={() => setSettledOpen(!settledOpen)}
+              className="flex h-7 w-full items-center gap-1.5 px-2.5 text-[12.5px] font-medium text-fg-3 hover:text-fg-2"
+            >
+              <CircleCheck size={12} />
+              {settledOpen ? 'Hide settled' : 'Show settled'}
+              <span className="font-normal text-fg-4">{settled.length}</span>
+              <ChevronDown size={12} className={clsx('ml-auto transition-transform duration-150', !settledOpen && '-rotate-90')} />
+            </button>
+            {settledOpen && (
+              <div className="mt-0.5 flex flex-col gap-px">
+                {settled.map((t) => (
+                  <ThreadRow key={t.id} t={t} active={t.id === activeId && view === 'chat'} hint={projectName(t.projectPath)} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="px-2 pb-3">
@@ -197,7 +224,14 @@ function ProjectRow({ name, path, collapsed, onToggle, running }: { name: string
   )
 }
 
-function ThreadRow({ t, active, nested }: { t: ThreadSummary; active: boolean; nested?: boolean }): React.JSX.Element {
+function setSettled(t: ThreadSummary, settled: boolean): void {
+  void api.updateThread(t.id, { settledAt: settled ? Date.now() : 0 })
+  // Settling tidies away its tab too, unless you're looking at it right now.
+  const s = useStore.getState()
+  if (settled && s.activeId !== t.id && s.tabs.includes(t.id)) s.closeTab(t.id)
+}
+
+function ThreadRow({ t, active, nested, hint }: { t: ThreadSummary; active: boolean; nested?: boolean; hint?: string }): React.JSX.Element {
   const openThread = useStore((s) => s.openThread)
   const [menu, setMenu] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -227,10 +261,23 @@ function ThreadRow({ t, active, nested }: { t: ThreadSummary; active: boolean; n
             }}
           />
         ) : (
-          <span className={clsx('truncate', active ? 'text-white' : 'text-fg')}>{t.title}</span>
+          <span className={clsx('truncate', active ? 'text-white' : t.settledAt ? 'text-fg-2' : 'text-fg')}>{t.title}</span>
         )}
         {t.pinned && <Pin size={10} className="shrink-0 opacity-50" />}
+        {hint && !renaming && <span className={clsx('ml-auto shrink-0 truncate text-[11px]', active ? 'text-white/70' : 'text-fg-4')}>{hint}</span>}
       </button>
+      {!t.running && (
+        <button
+          title={t.settledAt ? 'Unsettle — move back to your chats' : 'Settle — done for now, tuck it away'}
+          onClick={() => setSettled(t, !t.settledAt)}
+          className={clsx(
+            'hidden h-6 w-6 shrink-0 items-center justify-center rounded-md group-hover:flex',
+            active ? 'text-white/80 hover:bg-white/15' : 'text-fg-3 hover:bg-frame-active hover:text-fg'
+          )}
+        >
+          {t.settledAt ? <RotateCcw size={13} /> : <CircleCheck size={14} />}
+        </button>
+      )}
       <button
         ref={moreRef}
         onClick={() => setMenu(true)}
@@ -248,6 +295,9 @@ function ThreadRow({ t, active, nested }: { t: ThreadSummary; active: boolean; n
         </MenuItem>
         <MenuItem icon={<Pin size={14} />} onClick={() => (setMenu(false), void api.updateThread(t.id, { pinned: !t.pinned }))}>
           {t.pinned ? 'Unpin' : 'Pin'}
+        </MenuItem>
+        <MenuItem icon={t.settledAt ? <RotateCcw size={14} /> : <CircleCheck size={14} />} onClick={() => (setMenu(false), setSettled(t, !t.settledAt))}>
+          {t.settledAt ? 'Unsettle' : 'Settle'}
         </MenuItem>
         <MenuItem icon={<Archive size={14} />} onClick={() => (setMenu(false), void api.updateThread(t.id, { archived: true }), useStore.getState().closeTab(t.id))}>
           Archive

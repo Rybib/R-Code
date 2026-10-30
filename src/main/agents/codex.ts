@@ -1,9 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { homedir } from 'node:os'
-import type { AgentStatus, ModelOption, PermissionMode, Settings } from '@shared/types'
+import type { AgentStatus, ModelOption, PermissionMode, PlanUsage, Settings, UsageWindow } from '@shared/types'
 import { jsonLines, run, which } from '../env'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
-import { shortPath, truncate, uid } from './base'
+import { shortPath, truncate, uid, usageBus } from './base'
 import { diffStats } from '@shared/diffstat'
 import { describeRcodeTool } from '@shared/rcode-tools'
 
@@ -255,6 +255,10 @@ class CodexSession implements AgentSession {
 
   private onNotification(method: string, p: any): void {
     const sink = this.init.sink
+    if (method === 'account/rateLimits/updated') {
+      usageBus.emit('codex', p?.rateLimits)
+      return
+    }
     if (p?.threadId && this.threadId && p.threadId !== this.threadId) return
     switch (method) {
       case 'turn/started':
@@ -486,6 +490,23 @@ class CodexSession implements AgentSession {
 
 let modelCache: ModelOption[] | null = null
 
+/** A Codex RateLimitSnapshot as R-Code usage windows (primary is usually 5 hours, secondary weekly). */
+export function codexUsage(snap: any): PlanUsage | null {
+  if (!snap) return null
+  const windows: UsageWindow[] = []
+  const add = (id: string, w: any): void => {
+    if (!w || typeof w.usedPercent !== 'number') return
+    const mins = w.windowDurationMins
+    const label = mins === 300 ? '5-hour limit' : mins === 10080 ? 'Weekly limit' : mins ? (mins % 1440 === 0 ? `${mins / 1440}-day limit` : `${Math.round(mins / 60)}-hour limit`) : id === 'primary' ? 'Current limit' : 'Longer-term limit'
+    windows.push({ id, label, usedPercent: w.usedPercent, resetsAt: w.resetsAt ? (w.resetsAt < 1e12 ? w.resetsAt * 1000 : w.resetsAt) : undefined })
+  }
+  add('primary', snap.primary)
+  add('secondary', snap.secondary)
+  if (!windows.length) return null
+  const plan = typeof snap.planType === 'string' ? snap.planType.charAt(0).toUpperCase() + snap.planType.slice(1) : undefined
+  return { agent: 'codex', plan, windows, fetchedAt: Date.now() }
+}
+
 export const codexAdapter: AgentAdapter = {
   id: 'codex',
 
@@ -531,6 +552,21 @@ export const codexAdapter: AgentAdapter = {
       return out
     } catch {
       return [{ id: 'default', label: 'Default', agent: 'codex', provider: 'openai' }]
+    } finally {
+      rpc.kill()
+    }
+  },
+
+  async planUsage(): Promise<PlanUsage | null> {
+    const binary = which('codex')
+    if (!binary) return null
+    const rpc = new CodexRpc(binary)
+    try {
+      await rpc.initialize()
+      const res: any = await rpc.request('account/rateLimits/read', { excludeResetCreditDetails: true }, 20000)
+      return codexUsage(res?.rateLimits)
+    } catch {
+      return null
     } finally {
       rpc.kill()
     }

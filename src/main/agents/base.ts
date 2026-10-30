@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import type {
   AgentId,
   AgentStatus,
@@ -5,6 +6,7 @@ import type {
   ModelOption,
   PermissionMode,
   PlanStep,
+  PlanUsage,
   Settings,
   TimelineItem,
   Usage
@@ -78,7 +80,15 @@ export interface AgentAdapter {
   detect(settings: Settings): Promise<AgentStatus>
   listModels(settings: Settings): Promise<ModelOption[]>
   createSession(init: SessionInit): AgentSession
+  /** Subscription rate-limit usage, or null when the agent isn't on a plan with limits. */
+  planUsage?(): Promise<PlanUsage | null>
 }
+
+/**
+ * Live usage signals from running sessions: 'refresh' (agent id) asks for a re-read,
+ * 'codex' carries a rolling Codex rate-limit snapshot.
+ */
+export const usageBus = new EventEmitter()
 
 let counter = 0
 export function uid(prefix = 'i'): string {

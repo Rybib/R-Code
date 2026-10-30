@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { nativeImage, shell } from 'electron'
+import { app, nativeImage, shell } from 'electron'
 import { run, runShellStreaming, which } from '../env'
 import { dataPath, getSettings, updateSettings } from '../store'
 import type { ToolDef, ToolResult } from './registry'
@@ -65,11 +65,15 @@ export async function screenshot(udid: string, maxWidth = 900): Promise<{ data: 
   return { data: scaled.toPNG().toString('base64'), width: size.width, height: size.height, scale: size.width > 1000 ? 3 : 2 }
 }
 
-export const axePath = (): string | undefined => which('axe')
+/** AXe ships inside R-Code (Resources/axe); a separately installed `axe` on PATH is the fallback. */
+export function axePath(): string | undefined {
+  const bundled = app.isPackaged ? join(process.resourcesPath, 'axe', 'axe') : join(app.getAppPath(), 'vendor', 'axe', 'axe')
+  return existsSync(bundled) ? bundled : which('axe')
+}
 
 async function axe(args: string[], udid: string): Promise<ToolResult> {
   const bin = axePath()
-  if (!bin) return { text: 'UI automation needs the AXe CLI. Ask the user to install it from R-Code → Settings → iOS & Xcode (or run: brew install cameroncooke/axe/axe).', isError: true }
+  if (!bin) return { text: 'UI automation needs the AXe CLI, which is missing from this R-Code build. Ask the user to install it from the Simulator panel (or run: brew install cameroncooke/axe/axe).', isError: true }
   const r = await run(bin, [...args, '--udid', udid], { timeoutMs: 30000 })
   return { text: (r.stdout || r.stderr || 'ok').trim().slice(0, 30000), isError: r.code !== 0 }
 }
@@ -83,6 +87,7 @@ export async function pressHome(udid: string): Promise<ToolResult> {
 }
 
 export async function installAxe(log: (line: string) => void): Promise<boolean> {
+  if (axePath()) return true
   if (!which('brew')) {
     log('Homebrew is required to install AXe. Opening the AXe project page…')
     void shell.openExternal('https://github.com/cameroncooke/AXe')

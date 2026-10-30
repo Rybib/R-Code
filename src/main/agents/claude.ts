@@ -9,10 +9,10 @@ import {
   type SDKMessage,
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
-import type { AgentStatus, ModelOption, PermissionMode, Settings, ToolKind } from '@shared/types'
+import type { AgentStatus, ModelOption, PermissionMode, PlanUsage, Settings, ToolKind, UsageWindow } from '@shared/types'
 import { run, which } from '../env'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
-import { shortPath, truncate, uid } from './base'
+import { shortPath, truncate, uid, usageBus } from './base'
 import { currentContents, unifiedDiff } from './diff'
 import { describeRcodeTool } from '@shared/rcode-tools'
 
@@ -241,6 +241,9 @@ class ClaudeSession implements AgentSession {
     const sink = this.init.sink
     const m = msg as any
     switch (msg.type) {
+      case 'rate_limit_event':
+        usageBus.emit('refresh', 'claude')
+        break
       case 'system': {
         if (m.subtype === 'init') {
           this.sessionId = m.session_id
@@ -490,6 +493,44 @@ export const claudeAdapter: AgentAdapter = {
       }
     }
     return modelCache
+  },
+
+  async planUsage(): Promise<PlanUsage | null> {
+    const exe = claudeExecutable()
+    if (!exe) return null
+    // The same data Claude Code's /usage shows (experimental in the SDK, so read defensively).
+    const input = new InputQueue()
+    const q: any = query({ prompt: input, options: { pathToClaudeCodeExecutable: exe, settingSources: ['user'], cwd: homedir() } })
+    try {
+      const read = q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+      if (typeof read !== 'function') return null
+      const res: any = await Promise.race([read.call(q, { skipBehaviors: true }), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 20000))])
+      const rl = res?.rate_limits
+      if (!res?.rate_limits_available || !rl) return null
+      const windows: UsageWindow[] = []
+      const add = (id: string, label: string, w: any): void => {
+        if (w && typeof w.utilization === 'number') windows.push({ id, label, usedPercent: w.utilization, resetsAt: w.resets_at ? Date.parse(w.resets_at) : undefined })
+      }
+      add('five_hour', 'Current session', rl.five_hour)
+      add('seven_day', 'Current week (all models)', rl.seven_day)
+      if (Array.isArray(rl.model_scoped)) for (const m of rl.model_scoped) add(`model:${m.display_name}`, `Current week (${m.display_name})`, m)
+      else {
+        add('seven_day_opus', 'Current week (Opus)', rl.seven_day_opus)
+        add('seven_day_sonnet', 'Current week (Sonnet)', rl.seven_day_sonnet)
+      }
+      if (!windows.length) return null
+      const plan = typeof res.subscription_type === 'string' ? res.subscription_type.charAt(0).toUpperCase() + res.subscription_type.slice(1) : undefined
+      return { agent: 'claude', plan, windows, fetchedAt: Date.now() }
+    } catch {
+      return null
+    } finally {
+      input.close()
+      try {
+        q.close?.()
+      } catch {
+        /* ignore */
+      }
+    }
   },
 
   createSession(init: SessionInit): AgentSession {

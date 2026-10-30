@@ -21,6 +21,7 @@ import { deleteThreadFile, getSettings, loadAllThreads, saveThread } from './sto
 import { diffStats } from '@shared/diffstat'
 import type { ToolDef } from './tools/registry'
 import { str } from './tools/registry'
+import { refreshUsageSoon } from './usage'
 
 function withStats<T extends TimelineItem>(item: T): T {
   if (item.kind === 'tool' && item.diff && item.added === undefined) Object.assign(item, diffStats(item.diff))
@@ -41,7 +42,7 @@ const RCODE_INSTRUCTIONS = `You are running inside R-Code, a desktop app that un
 - R-Code gives you extra tools (prefixed rcode / mcp__rcode__ when exposed over MCP):
   • delegate_task / list_agents — hand a self-contained task to another agent or model (including free local models via the built-in Pi + Ollama) and get its report back.
   • suggest_new_chat — propose continuing in a fresh, clean context seeded with your summary when the conversation is long or the topic changed.
-  • browser_open / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_eval / browser_console — drive R-Code's built-in browser (visible to the user) to check local dev servers and web pages.
+  • browser_open / browser_snapshot / browser_click / browser_type / browser_screenshot / browser_eval / browser_console — drive R-Code's built-in browser, which opens beside the chat for the user to see. Use it to show the user a page, check a local dev server, or do interactive web tasks. For plain lookups (searching, reading docs or an article), use your web search/fetch tools instead, which don't open the browser.
   • ios_build_and_run / ios_screenshot / ios_tap / ios_swipe / ios_type_text / ios_describe_ui / ios_list_simulators / ios_boot_simulator / ios_open_url / ios_app_logs — build Xcode projects, run them in the iOS Simulator (shown live in R-Code) and test them like a user.
 - Prefer delegating large, separable side-quests (research, reviews, bulk edits) so your own context stays clean.
 - Keep answers well-formatted Markdown.`
@@ -118,7 +119,7 @@ export class Orchestrator {
     return t
   }
 
-  update(id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'pinned' | 'permissionMode' | 'model' | 'effort' | 'agent' | 'projectPath'>>): void {
+  update(id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'settledAt' | 'pinned' | 'permissionMode' | 'model' | 'effort' | 'agent' | 'projectPath'>>): void {
     const t = this.threads.get(id)
     if (!t) return
     Object.assign(t, patch)
@@ -311,6 +312,8 @@ export class Orchestrator {
     const model = opts.model ?? (agent === t.agent ? t.model : getSettings().defaultModels[agent] ?? 'default')
     const effort = opts.effort ?? (agent === t.agent ? t.effort : undefined)
     const mode = opts.permissionMode ?? t.permissionMode
+    // Picking a settled chat back up makes it active work again.
+    if (t.settledAt) t.settledAt = undefined
 
     if (this.running.has(threadId)) {
       // Busy: steer the running agent if it's the same one, otherwise queue.
@@ -363,6 +366,7 @@ export class Orchestrator {
   }
 
   private onTurnDone(t: Thread, agent: AgentId, error?: string): void {
+    refreshUsageSoon(agent)
     if (!this.running.has(t.id)) return
     this.running.delete(t.id)
     this.denyPendingApprovals(t.id)
