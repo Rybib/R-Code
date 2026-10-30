@@ -320,18 +320,6 @@ button {
   transform-origin: var(--origin, top left);
 }
 
-@keyframes pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent);
-  }
-  100% {
-    box-shadow: 0 0 0 10px transparent;
-  }
-}
-.recording {
-  animation: pulse-ring 1.2s ease-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

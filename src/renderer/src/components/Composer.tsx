@@ -36,7 +36,6 @@ export function Composer({
   const sendMessage = useStore((s) => s.sendMessage)
   const recording = useVoice((s) => s.recording)
   const transcribing = useVoice((s) => s.transcribing)
-  const level = useVoice((s) => s.level)
   const ref = useRef<HTMLTextAreaElement>(null)
   const [dragging, setDragging] = useState(false)
   const [voiceError, setVoiceError] = useState<string | null>(null)
@@ -88,23 +87,25 @@ export function Composer({
     if (out.length) setImages([...useStore.getState().composerImages[threadKey] ?? [], ...out])
   }
 
-  const toggleMic = async (): Promise<void> => {
+  /** Stop dictating and transcribe: put the words in the box, or send them right away. */
+  const finishDictation = async (send: boolean): Promise<void> => {
     setVoiceError(null)
-    if (recording) {
-      try {
-        const said = await stopRecordingAndTranscribe(settings.whisperModel, settings.voiceLanguage)
-        if (!said) return
-        const merged = text ? `${text.trimEnd()} ${said}` : said
-        if (settings.autoSendVoice) await submit(merged)
-        else {
-          setText(merged)
-          ref.current?.focus()
-        }
-      } catch (err: any) {
-        setVoiceError(err?.message ?? String(err))
+    try {
+      const said = await stopRecordingAndTranscribe(settings.whisperModel, settings.voiceLanguage)
+      const merged = said ? (text ? `${text.trimEnd()} ${said}` : said) : text
+      if (send) await submit(merged)
+      else if (said) {
+        setText(merged)
+        ref.current?.focus()
       }
-      return
+    } catch (err: any) {
+      setVoiceError(err?.message ?? String(err))
     }
+  }
+
+  const toggleMic = async (): Promise<void> => {
+    if (recording) return finishDictation(settings.autoSendVoice)
+    setVoiceError(null)
     try {
       await startRecording(settings.whisperModel)
     } catch (err: any) {
@@ -133,7 +134,8 @@ export function Composer({
         ? `Steer ${AGENT_LABELS[selection.agent]} or queue a follow-up…`
         : `Ask ${AGENT_LABELS[selection.agent]} something…`
 
-  const canSend = (text.trim().length > 0 || images.length > 0) && !recording && !transcribing
+  // While dictating, Send stops the recording, transcribes, and sends in one go.
+  const canSend = recording || ((text.trim().length > 0 || images.length > 0) && !transcribing)
 
   return (
     <div
@@ -212,9 +214,8 @@ export function Composer({
           disabled={transcribing}
           className={clsx(
             'relative flex h-7 w-7 items-center justify-center rounded-full transition-colors',
-            recording ? 'recording bg-danger text-white' : 'text-fg-3 hover:bg-raised-2 hover:text-fg'
+            recording ? 'bg-danger text-white' : 'text-fg-3 hover:bg-raised-2 hover:text-fg'
           )}
-          style={recording ? { transform: `scale(${1 + level * 0.18})` } : undefined}
         >
           {transcribing ? <Loader2 size={14} className="animate-spin" /> : recording ? <Check size={14} strokeWidth={2.6} /> : <Mic size={14} />}
         </button>
@@ -224,9 +225,9 @@ export function Composer({
           </button>
         ) : (
           <button
-            title="Send (↵)"
+            title={recording ? 'Stop dictating and send' : 'Send (↵)'}
             disabled={!canSend}
-            onClick={() => void submit()}
+            onClick={() => void (recording ? finishDictation(true) : submit())}
             className={clsx(
               'flex h-7 w-7 items-center justify-center rounded-full transition-[background-color,transform] duration-150 active:scale-90',
               canSend ? 'bg-accent text-white' : 'bg-fg-4/40 text-panel'
