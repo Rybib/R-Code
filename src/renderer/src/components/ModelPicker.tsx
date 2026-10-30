@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Check, ChevronDown, Cpu, EyeOff, Search, Star, Gauge, Settings2 } from 'lucide-react'
+import { Check, ChevronDown, Cpu, EyeOff, Search, Star, Settings2 } from 'lucide-react'
 import { AGENT_IDS, AGENT_LABELS, PERMISSION_LABELS, type AgentId, type ModelOption, type PermissionMode } from '@shared/types'
 import { useStore } from '../store'
 import { AgentIcon, MenuItem, Popover, Spinner } from './ui'
-import { EffortSlider } from './EffortSlider'
 
 export interface Selection {
   agent: AgentId
@@ -53,7 +52,6 @@ export function ModelPicker({
     if (open) for (const a of settings.linkedAgents) if (!models[a]) void loadModels(a)
   }, [open, settings.linkedAgents, models, loadModels])
 
-  const current = models[value.agent]?.find((m) => m.id === value.model)
   const label = modelLabel(models[value.agent], value.model, value.agent)
   const q = query.trim().toLowerCase()
 
@@ -202,19 +200,6 @@ export function ModelPicker({
             <EyeOff size={11} />
             {hiddenCount} hidden {hiddenCount === 1 ? 'model' : 'models'} · Manage
           </button>
-        )}
-        {current?.efforts && current.efforts.length > 1 && (
-          <div className="border-t border-line-soft px-1.5 pt-2.5 pb-1">
-            <div className="mb-1.5 flex items-center gap-1.5 px-1">
-              <Gauge size={13} className="text-fg-3" />
-              <span className="text-[12px] text-fg-3">Effort</span>
-            </div>
-            <EffortSlider
-              efforts={current.efforts}
-              value={value.effort && current.efforts.includes(value.effort) ? value.effort : (current.defaultEffort ?? current.efforts[0])}
-              onChange={(e) => onChange({ ...value, effort: e })}
-            />
-          </div>
         )}
       </Popover>
     </>
