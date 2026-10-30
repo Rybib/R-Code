@@ -173,6 +173,8 @@ function UserBubble({ item }: { item: Extract<TimelineItem, { kind: 'user' }> })
 function AssistantMessage({ item, showLabel }: { item: Extract<TimelineItem, { kind: 'assistant' }>; showLabel: boolean }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const speakingId = useVoice((s) => s.speakingId)
+  const speakError = useVoice((s) => (s.speakError?.id === item.id ? s.speakError.message : null))
+  const ttsLoading = useVoice((s) => (s.speakingId === item.id && s.tts.status === 'loading' ? s.tts.progress : null))
   const ttsEnabled = useStore((s) => s.settings.ttsEnabled)
   const voice = useStore((s) => s.settings.ttsVoice)
   const speed = useStore((s) => s.settings.ttsSpeed)
@@ -191,7 +193,7 @@ function AssistantMessage({ item, showLabel }: { item: Extract<TimelineItem, { k
       <Markdown text={item.text} />
       {item.streaming && <span className="ml-0.5 inline-block h-[1.1em] w-[7px] translate-y-[3px] animate-pulse rounded-[2px] bg-fg-3" />}
       {!item.streaming && item.text && (
-        <div className="mt-1 flex h-6 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        <div className={clsx('mt-1 flex h-6 items-center gap-0.5 transition-opacity duration-150 group-hover:opacity-100', speaking || speakError ? 'opacity-100' : 'opacity-0')}>
           <button
             title="Copy"
             onClick={() => {
@@ -206,11 +208,17 @@ function AssistantMessage({ item, showLabel }: { item: Extract<TimelineItem, { k
           {ttsEnabled && (
             <button
               title={speaking ? 'Stop reading' : 'Read aloud'}
-              onClick={() => (speaking ? stopSpeaking() : void speak(item.id, item.text, voice, speed))}
+              onClick={() => (speaking ? stopSpeaking() : void speak(item.id, item.text, voice, speed).catch(() => {}))}
               className={clsx('flex h-6 w-6 items-center justify-center rounded-md hover:bg-raised-2 hover:text-fg', speaking ? 'text-accent' : 'text-fg-3')}
             >
               {speaking ? <VolumeX size={13} /> : <Volume2 size={13} />}
             </button>
+          )}
+          {ttsLoading !== null && <span className="ml-1 text-[11.5px] text-fg-3">Loading voice {Math.round(ttsLoading * 100)}%…</span>}
+          {speakError && !speaking && (
+            <span className="ml-1 max-w-[420px] truncate text-[11.5px] text-danger" title={speakError}>
+              Couldn’t read aloud: {speakError}
+            </span>
           )}
         </div>
       )}

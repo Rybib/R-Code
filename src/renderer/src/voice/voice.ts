@@ -38,6 +38,8 @@ interface VoiceState {
   transcribing: boolean
   level: number
   speakingId: string | null
+  /** Why the last read-aloud failed, shown next to the play button. */
+  speakError: { id: string; message: string } | null
   cached: Record<string, boolean>
 }
 
@@ -48,6 +50,7 @@ export const useVoice = create<VoiceState>(() => ({
   transcribing: false,
   level: 0,
   speakingId: null,
+  speakError: null,
   cached: {}
 }))
 
@@ -56,7 +59,22 @@ export const useVoice = create<VoiceState>(() => ({
 let sttWorker: Worker | null = null
 let ttsWorker: Worker | null = null
 let reqId = 0
-const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>()
+const pending = new Map<number, { worker: Worker; resolve: (v: any) => void; reject: (e: Error) => void }>()
+
+/** Fail everything waiting on a worker and drop it, so the next request starts a fresh one. */
+function resetWorker(kind: 'stt' | 'tts', reason: string): void {
+  const worker = kind === 'stt' ? sttWorker : ttsWorker
+  if (!worker) return
+  for (const [id, p] of pending) {
+    if (p.worker !== worker) continue
+    pending.delete(id)
+    p.reject(new Error(reason))
+  }
+  worker.terminate()
+  if (kind === 'stt') sttWorker = null
+  else ttsWorker = null
+  useVoice.setState((s) => ({ [kind]: { ...s[kind], status: 'idle', progress: 0 } }) as any)
+}
 
 function progressTracker(kind: 'stt' | 'tts'): (msg: any) => void {
   const files = new Map<string, { loaded: number; total: number }>()
@@ -96,6 +114,7 @@ function stt(): Worker {
       track(e.data)
       if (e.data.id !== undefined) settle(e.data)
     }
+    sttWorker.onerror = (e) => resetWorker('stt', `Whisper stopped unexpectedly${e.message ? `: ${e.message}` : ''}`)
   }
   return sttWorker
 }
@@ -108,6 +127,7 @@ function tts(): Worker {
       track(e.data)
       if (e.data.id !== undefined) settle(e.data)
     }
+    ttsWorker.onerror = (e) => resetWorker('tts', `The voice engine stopped unexpectedly${e.message ? `: ${e.message}` : ''}`)
   }
   return ttsWorker
 }
@@ -115,7 +135,7 @@ function tts(): Worker {
 function call(worker: Worker, msg: Record<string, unknown>, transfer: Transferable[] = []): Promise<any> {
   const id = ++reqId
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject })
+    pending.set(id, { worker, resolve, reject })
     worker.postMessage({ ...msg, id }, transfer)
   })
 }
@@ -180,7 +200,9 @@ export function getAnalyser(): AnalyserNode | null {
 if (import.meta.env.DEV) {
   ;(window as any).__voiceTest = {
     start: (analyser: AnalyserNode) => ((meterAnalyser = analyser), useVoice.setState({ recording: true })),
-    stop: () => ((meterAnalyser = null), useVoice.setState({ recording: false, level: 0 }))
+    stop: () => ((meterAnalyser = null), useVoice.setState({ recording: false, level: 0 })),
+    playback: () => playCtx,
+    killTts: () => ttsWorker?.terminate()
   }
 }
 
@@ -301,31 +323,83 @@ export function stopSpeaking(): void {
   useVoice.setState({ speakingId: null })
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * A running AudioContext for playback. macOS can suspend or interrupt a long-lived context
+ * (after the mic was used, the output device changed, or the Mac slept); audio sent to it is
+ * silently dropped. Resume it if possible, otherwise start a fresh one.
+ */
+async function playbackContext(): Promise<AudioContext> {
+  if (playCtx && playCtx.state !== 'closed') {
+    if (playCtx.state !== 'running') await Promise.race([playCtx.resume().catch(() => {}), sleep(500)])
+    if (playCtx.state === 'running') return playCtx
+    void playCtx.close().catch(() => {})
+  }
+  playCtx = new AudioContext()
+  if (playCtx.state !== 'running') await Promise.race([playCtx.resume().catch(() => {}), sleep(500)])
+  return playCtx
+}
+
+// Follow the system output (AirPods, speakers, displays) by rebuilding the context on change.
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  if (playing || !playCtx) return
+  void playCtx.close().catch(() => {})
+  playCtx = null
+})
+
+/** Generate one chunk, giving up (and restarting the engine) if it stalls once loaded. */
+async function generate(text: string, voice: string, speed: number): Promise<any> {
+  const worker = tts()
+  const req = call(worker, { type: 'speak', text, voice, speed })
+  for (;;) {
+    const res = await Promise.race([req.then((r) => ({ r })), sleep(45000).then(() => null)])
+    if (res) return res.r
+    // Still downloading the model: keep waiting. Otherwise the engine is stuck.
+    if (useVoice.getState().tts.status !== 'loading') {
+      resetWorker('tts', 'The voice engine stopped responding. Try again.')
+      return req
+    }
+  }
+}
+
 export async function speak(id: string, markdown: string, voice: string, speed: number): Promise<void> {
   stopSpeaking()
   const token = ++speakToken
-  useVoice.setState({ speakingId: id })
+  useVoice.setState({ speakingId: id, speakError: null })
   const parts = chunkText(speakableText(markdown))
-  playCtx ??= new AudioContext()
   // Generate the next chunk while the current one plays.
-  let next = parts.length ? call(tts(), { type: 'speak', text: parts[0], voice, speed }) : null
+  let next = parts.length ? generate(parts[0], voice, speed) : null
+  next?.catch(() => {})
   try {
     for (let i = 0; i < parts.length && next; i++) {
       const res = await next
       if (token !== speakToken) return
-      next = i + 1 < parts.length ? call(tts(), { type: 'speak', text: parts[i + 1], voice, speed }) : null
-      const buffer = playCtx.createBuffer(1, res.samples.length, res.sampleRate)
+      next = i + 1 < parts.length ? generate(parts[i + 1], voice, speed) : null
+      next?.catch(() => {})
+      const ctx = await playbackContext()
+      if (token !== speakToken) return
+      const buffer = ctx.createBuffer(1, res.samples.length, res.sampleRate)
       buffer.copyToChannel(res.samples, 0)
-      await new Promise<void>((resolve) => {
-        const src = playCtx!.createBufferSource()
+      const ended = await new Promise<boolean>((resolve) => {
+        const src = ctx.createBufferSource()
         src.buffer = buffer
-        src.connect(playCtx!.destination)
-        src.onended = () => resolve()
+        src.connect(ctx.destination)
+        src.onended = () => resolve(true)
         playing = src
         src.start()
+        // If the clip never reports finishing, the context is stuck: don't hang forever.
+        setTimeout(() => resolve(false), (buffer.duration / Math.max(0.1, src.playbackRate.value)) * 1000 + 2000)
       })
+      if (!ended && playCtx === ctx) {
+        void ctx.close().catch(() => {})
+        playCtx = null
+      }
       if (token !== speakToken) return
     }
+  } catch (err: any) {
+    if (token === speakToken) useVoice.setState({ speakError: { id, message: err?.message ?? String(err) } })
+    throw err
   } finally {
     if (token === speakToken) useVoice.setState({ speakingId: null })
   }

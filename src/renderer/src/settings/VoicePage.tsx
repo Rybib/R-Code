@@ -183,6 +183,7 @@ export function VoicePage(): React.JSX.Element {
   const recording = useVoice((v) => v.recording)
   const transcribing = useVoice((v) => v.transcribing)
   const speakingId = useVoice((v) => v.speakingId)
+  const previewError = useVoice((v) => (v.speakError?.id === 'preview' ? v.speakError.message : null))
   const cachedKokoro = useVoice((v) => v.cached.kokoro)
   const [heard, setHeard] = useState<string | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
@@ -260,7 +261,16 @@ export function VoicePage(): React.JSX.Element {
             <span className="w-10 text-right text-[12px] text-fg-3">{s.ttsSpeed.toFixed(2)}×</span>
           </div>
         </Row>
-        <Row label="Preview" hint={tts.status === 'loading' ? `Loading Kokoro… ${Math.round(tts.progress * 100)}%` : tts.error ?? (cachedKokoro ? undefined : 'Downloads the model on first use.')}>
+        <Row label="Preview" hint={
+            tts.status === 'loading' ? (
+              `Loading Kokoro… ${Math.round(tts.progress * 100)}%`
+            ) : previewError || tts.error ? (
+              <span className="text-danger">{previewError ?? tts.error}</span>
+            ) : cachedKokoro ? undefined : (
+              'Downloads the model on first use.'
+            )
+          }
+        >
           <Button
             size="sm"
             variant="secondary"
