@@ -76,14 +76,20 @@ interface FinalInfo {
   endTs: number
 }
 
-/** The closing reply of each completed task that did real work (tools), keyed by item id. */
+/** Tool kinds that mean the agent actually built something: edits, commands, the Simulator, subagents. */
+const CODING_KINDS = new Set<ToolKind>(['edit', 'command', 'ios', 'task'])
+
+/**
+ * The closing reply of each completed coding task, keyed by item id. Turns that only looked
+ * things up (web searches, page reads, file reads) end with a plain reply instead.
+ */
 function finalReplies(items: TimelineItem[], running: boolean): Map<string, FinalInfo> {
   const out = new Map<string, FinalInfo>()
   let start = 0
   let tools: ToolItem[] = []
   let last: AssistantItem | undefined
   const close = (): void => {
-    if (last && tools.length) out.set(last.id, { tools, startTs: start, endTs: Math.max(last.ts, ...tools.map((t) => t.ts)) })
+    if (last && tools.some((t) => CODING_KINDS.has(t.toolKind))) out.set(last.id, { tools, startTs: start, endTs: Math.max(last.ts, ...tools.map((t) => t.ts)) })
   }
   for (const it of items) {
     if (it.parentId) continue
