@@ -1,0 +1,342 @@
+@import 'tailwindcss';
+
+/* R-Code design tokens — modeled on Poolside's calm charcoal palette. */
+:root {
+  --accent: #5b6cff;
+  --chat-font-size: 15px;
+  --code-font: 'SF Mono', Menlo, ui-monospace, monospace;
+
+  --frame: #2d3035;
+  --frame-hover: #363a40;
+  --frame-active: #3b4047;
+  --panel: #1d2025;
+  --panel-border: #2a2d33;
+  --raised: #262a30;
+  --raised-2: #2e3238;
+  --field: #31363c;
+  --field-border: #3a3f46;
+  --line: #33373e;
+  --line-soft: #2a2e34;
+  --text: #e7e8ea;
+  --text-2: #b3b6bb;
+  --text-3: #8a8e94;
+  --text-4: #666a70;
+  --bubble: #3773ef;
+  --bubble-text: #ffffff;
+  --code-bg: #171a1e;
+  --inline-code: #2f343b;
+  --danger: #ef5d5d;
+  --warn: #e6a23c;
+  --ok: #3fb97f;
+  --grid-line: rgba(255, 255, 255, 0.035);
+  --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --frame: #ececee;
+  --frame-hover: #e2e2e5;
+  --frame-active: #d9d9dd;
+  --panel: #fbfbfc;
+  --panel-border: #dedee2;
+  --raised: #f3f3f5;
+  --raised-2: #eaeaed;
+  --field: #ffffff;
+  --field-border: #d6d6db;
+  --line: #e1e1e5;
+  --line-soft: #ececef;
+  --text: #1b1c1f;
+  --text-2: #4a4d53;
+  --text-3: #75787e;
+  --text-4: #a0a3a8;
+  --bubble: #3773ef;
+  --code-bg: #f4f4f6;
+  --inline-code: #ececef;
+  --grid-line: rgba(0, 0, 0, 0.045);
+  --shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  color-scheme: light;
+}
+
+:root[data-translucent='true'] {
+  --frame: transparent;
+}
+
+@theme inline {
+  --color-frame: var(--frame);
+  --color-frame-hover: var(--frame-hover);
+  --color-frame-active: var(--frame-active);
+  --color-panel: var(--panel);
+  --color-panel-border: var(--panel-border);
+  --color-raised: var(--raised);
+  --color-raised-2: var(--raised-2);
+  --color-field: var(--field);
+  --color-field-border: var(--field-border);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-fg: var(--text);
+  --color-fg-2: var(--text-2);
+  --color-fg-3: var(--text-3);
+  --color-fg-4: var(--text-4);
+  --color-accent: var(--accent);
+  --color-bubble: var(--bubble);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  --font-mono: var(--code-font);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--frame);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+.selectable,
+.selectable * {
+  user-select: text;
+  cursor: auto;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+button {
+  cursor: default;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Thin, quiet scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text) 30%, transparent);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Hero grid, fading out from the center like Poolside's empty state */
+.hero-grid {
+  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 55% 50% at 50% 42%, black 30%, transparent 75%);
+}
+
+/* Chat markdown */
+.prose-chat {
+  font-size: var(--chat-font-size);
+  line-height: 1.62;
+  color: var(--text);
+}
+.prose-chat > :first-child {
+  margin-top: 0;
+}
+.prose-chat > :last-child {
+  margin-bottom: 0;
+}
+.prose-chat p {
+  margin: 0.55em 0;
+}
+.prose-chat h1,
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4 {
+  font-weight: 650;
+  margin: 1.1em 0 0.45em;
+  line-height: 1.3;
+}
+.prose-chat h1 {
+  font-size: 1.35em;
+}
+.prose-chat h2 {
+  font-size: 1.2em;
+}
+.prose-chat h3 {
+  font-size: 1.05em;
+}
+.prose-chat ul,
+.prose-chat ol {
+  margin: 0.5em 0;
+  padding-left: 1.5em;
+}
+.prose-chat ul {
+  list-style: disc;
+}
+.prose-chat ol {
+  list-style: decimal;
+}
+.prose-chat li {
+  margin: 0.25em 0;
+  padding-left: 0.2em;
+}
+.prose-chat li::marker {
+  color: var(--text-3);
+}
+.prose-chat strong {
+  font-weight: 650;
+}
+.prose-chat a {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.prose-chat code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--inline-code);
+  padding: 0.12em 0.38em;
+  border-radius: 5px;
+}
+.prose-chat blockquote {
+  border-left: 3px solid var(--line);
+  padding-left: 0.9em;
+  color: var(--text-2);
+  margin: 0.6em 0;
+}
+.prose-chat table {
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  font-size: 0.92em;
+  display: block;
+  overflow-x: auto;
+}
+.prose-chat th,
+.prose-chat td {
+  border: 1px solid var(--line);
+  padding: 0.35em 0.7em;
+  text-align: left;
+}
+.prose-chat th {
+  background: var(--raised);
+  font-weight: 600;
+}
+.prose-chat hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 1.2em 0;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: transparent !important;
+}
+.code-block code {
+  font-family: var(--font-mono);
+}
+
+/* The squiggle shown next to activity that's still running */
+@keyframes squiggle {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 24px 0;
+  }
+}
+.squiggle {
+  height: 8px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='8' viewBox='0 0 24 8'%3E%3Cpath d='M0 4 Q 6 0 12 4 T 24 4' fill='none' stroke='%23888' stroke-width='1.2' opacity='0.55'/%3E%3C/svg%3E");
+  background-repeat: repeat-x;
+  animation: squiggle 0.9s linear infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.shimmer-text {
+  background: linear-gradient(90deg, var(--text-3) 0%, var(--text) 50%, var(--text-3) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fade-up {
+  animation: fade-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.pop-in {
+  animation: pop-in 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: var(--origin, top left);
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+.recording {
+  animation: pulse-ring 1.2s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
