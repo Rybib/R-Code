@@ -262,7 +262,8 @@ export function MenuItem({
     >
       {icon && <span className="flex w-4 shrink-0 justify-center text-fg-3">{icon}</span>}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {hint && <span className="shrink-0 text-[11.5px] text-fg-3">{hint}</span>}
+      {/* The hint (a path, a shortcut…) gives way first so the label always shows. */}
+      {hint && <span className="flex max-w-[40%] min-w-0 shrink-0 items-center justify-end truncate text-[11.5px] text-fg-3 [&>span]:truncate">{hint}</span>}
     </button>
   )
 }

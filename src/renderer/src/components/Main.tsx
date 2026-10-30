@@ -127,12 +127,12 @@ export function Hero(): React.JSX.Element {
           <span>using</span>
           <ModelPicker variant="hero" placement="bottom-start" value={sel} onChange={(s) => setDraft({ agent: s.agent, model: s.model, effort: s.effort })} />
         </div>
-        <Popover anchor={btn.current} open={menu} onClose={() => setMenu(false)} className="w-64">
+        <Popover anchor={btn.current} open={menu} onClose={() => setMenu(false)} className="w-80">
           <MenuItem icon={<Home size={14} />} active={!draft.projectPath} onClick={() => (setDraft({ projectPath: undefined }), setMenu(false))}>
             Home (no project)
           </MenuItem>
           {projects.map((p) => (
-            <MenuItem key={p.path} icon={<FolderOpen size={14} />} active={p.path === draft.projectPath} onClick={() => (setDraft({ projectPath: p.path }), setMenu(false))} hint={<span className="max-w-[90px] truncate">{p.path.replace(/^\/Users\/[^/]+/, '~')}</span>}>
+            <MenuItem key={p.path} icon={<FolderOpen size={14} />} active={p.path === draft.projectPath} onClick={() => (setDraft({ projectPath: p.path }), setMenu(false))} hint={<span className="truncate" dir="rtl"><span dir="ltr">{p.path.replace(/^\/Users\/[^/]+/, '~').replace(/\/[^/]+\/?$/, '') || '/'}</span></span>}>
               {p.name}
             </MenuItem>
           ))}

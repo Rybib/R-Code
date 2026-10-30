@@ -52,14 +52,14 @@ export function ProjectSwitcher({ threadId, variant, branch }: { threadId: strin
         )}
         <ChevronDown size={11} className="shrink-0 text-fg-4" />
       </button>
-      <Popover anchor={btn.current} open={open} onClose={() => setOpen(false)} placement={variant === 'toolbar' ? 'bottom-end' : 'top-start'} className="w-72">
+      <Popover anchor={btn.current} open={open} onClose={() => setOpen(false)} placement={variant === 'toolbar' ? 'bottom-end' : 'top-start'} className="w-80">
         <div className="px-2.5 pt-1.5 pb-1 text-[11px] font-medium tracking-wide text-fg-4 uppercase">Move chat to</div>
         {projects.map((p) => (
           <MenuItem
             key={p.path}
             icon={<FolderOpen size={14} />}
             onClick={() => void move(p.path)}
-            hint={p.path === current ? <Check size={13} className="text-accent" /> : <span className="max-w-[110px] truncate">{p.path.replace(/^\/Users\/[^/]+/, '~')}</span>}
+            hint={p.path === current ? <Check size={13} className="text-accent" /> : <span className="truncate" dir="rtl"><span dir="ltr">{p.path.replace(/^\/Users\/[^/]+/, '~').replace(/\/[^/]+\/?$/, '') || '/'}</span></span>}
           >
             {p.name}
           </MenuItem>
