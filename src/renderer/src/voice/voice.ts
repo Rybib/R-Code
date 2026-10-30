@@ -314,6 +314,7 @@ function chunkText(text: string, max = 260): string[] {
 
 export function stopSpeaking(): void {
   speakToken++
+  narration.length = 0
   try {
     playing?.stop()
   } catch {
@@ -363,6 +364,28 @@ async function generate(text: string, voice: string, speed: number): Promise<any
   }
 }
 
+/** Play one generated clip to the end (or until speech is stopped). */
+async function playClip(res: { samples: Float32Array<ArrayBuffer>; sampleRate: number }, token: number): Promise<void> {
+  const ctx = await playbackContext()
+  if (token !== speakToken) return
+  const buffer = ctx.createBuffer(1, res.samples.length, res.sampleRate)
+  buffer.copyToChannel(res.samples, 0)
+  const ended = await new Promise<boolean>((resolve) => {
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    src.connect(ctx.destination)
+    src.onended = () => resolve(true)
+    playing = src
+    src.start()
+    // If the clip never reports finishing, the context is stuck: don't hang forever.
+    setTimeout(() => resolve(false), (buffer.duration / Math.max(0.1, src.playbackRate.value)) * 1000 + 2000)
+  })
+  if (!ended && playCtx === ctx) {
+    void ctx.close().catch(() => {})
+    playCtx = null
+  }
+}
+
 export async function speak(id: string, markdown: string, voice: string, speed: number): Promise<void> {
   stopSpeaking()
   const token = ++speakToken
@@ -377,24 +400,7 @@ export async function speak(id: string, markdown: string, voice: string, speed: 
       if (token !== speakToken) return
       next = i + 1 < parts.length ? generate(parts[i + 1], voice, speed) : null
       next?.catch(() => {})
-      const ctx = await playbackContext()
-      if (token !== speakToken) return
-      const buffer = ctx.createBuffer(1, res.samples.length, res.sampleRate)
-      buffer.copyToChannel(res.samples, 0)
-      const ended = await new Promise<boolean>((resolve) => {
-        const src = ctx.createBufferSource()
-        src.buffer = buffer
-        src.connect(ctx.destination)
-        src.onended = () => resolve(true)
-        playing = src
-        src.start()
-        // If the clip never reports finishing, the context is stuck: don't hang forever.
-        setTimeout(() => resolve(false), (buffer.duration / Math.max(0.1, src.playbackRate.value)) * 1000 + 2000)
-      })
-      if (!ended && playCtx === ctx) {
-        void ctx.close().catch(() => {})
-        playCtx = null
-      }
+      await playClip(res, token)
       if (token !== speakToken) return
     }
   } catch (err: any) {
@@ -402,6 +408,50 @@ export async function speak(id: string, markdown: string, voice: string, speed: 
     throw err
   } finally {
     if (token === speakToken) useVoice.setState({ speakingId: null })
+  }
+}
+
+// Live narration: text is queued as the agent writes it and spoken in order, with the next
+// sentence generated while the current one plays.
+const narration: { id: string; text: string }[] = []
+let narrating = false
+
+export function narrate(id: string, markdown: string, voice: string, speed: number): void {
+  const text = speakableText(markdown)
+  if (!text) return
+  for (const part of chunkText(text)) narration.push({ id, text: part })
+  if (!narrating) void runNarration(voice, speed)
+}
+
+async function runNarration(voice: string, speed: number): Promise<void> {
+  narrating = true
+  const token = speakToken
+  let ahead: { item: { id: string; text: string }; clip: Promise<any> } | null = null
+  let current: { id: string; text: string } | undefined
+  try {
+    for (;;) {
+      const item = ahead?.item ?? narration.shift()
+      if (!item || token !== speakToken) break
+      current = item
+      const clip = await (ahead?.clip ?? generate(item.text, voice, speed))
+      ahead = null
+      if (token !== speakToken) break
+      const next = narration.shift()
+      if (next) {
+        ahead = { item: next, clip: generate(next.text, voice, speed) }
+        ahead.clip.catch(() => {})
+      }
+      useVoice.setState({ speakingId: item.id, speakError: null })
+      await playClip(clip, token)
+    }
+  } catch (err: any) {
+    if (token === speakToken && current) useVoice.setState({ speakError: { id: current.id, message: err?.message ?? String(err) } })
+  } finally {
+    narrating = false
+    if (token === speakToken) {
+      useVoice.setState({ speakingId: null })
+      if (narration.length) void runNarration(voice, speed)
+    }
   }
 }
 

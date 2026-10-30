@@ -218,6 +218,8 @@ export interface Settings {
   autoSendVoice: boolean
   ttsEnabled: boolean
   ttsAutoRead: boolean
+  /** Narrate replies sentence by sentence while the agent is still working. */
+  ttsLiveRead: boolean
   ttsVoice: string
   ttsSpeed: number
   // pi
@@ -258,6 +260,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoSendVoice: false,
   ttsEnabled: true,
   ttsAutoRead: false,
+  ttsLiveRead: false,
   ttsVoice: 'af_heart',
   ttsSpeed: 1,
   ollama: { enabled: false, baseUrl: 'http://127.0.0.1:11434', models: [] },

@@ -43,10 +43,11 @@ function statsOf(t: ToolItem): { added: number; removed: number } {
 type ToolItem = Extract<TimelineItem, { kind: 'tool' }>
 type ReasoningItem = Extract<TimelineItem, { kind: 'reasoning' }>
 
-type Block =
-  | { type: 'item'; item: TimelineItem }
-  | { type: 'tools'; id: string; items: ToolItem[] }
-  | { type: 'thought'; item: ReasoningItem }
+type AssistantItem = Extract<TimelineItem, { kind: 'assistant' }>
+type WorkEntry = ToolItem | ReasoningItem
+
+/** A stretch of work between written replies: tool calls plus the thinking around them. */
+type Block = { type: 'item'; item: TimelineItem } | { type: 'work'; id: string; entries: WorkEntry[] }
 
 function buildBlocks(items: TimelineItem[]): Block[] {
   const blocks: Block[] = []
@@ -54,13 +55,11 @@ function buildBlocks(items: TimelineItem[]): Block[] {
     if (it.parentId) continue
     // A delegation card already represents R-Code's delegate_task call.
     if (it.kind === 'tool' && /delegate_task$/.test(it.tool)) continue
-    if (it.kind === 'tool') {
+    if (it.kind === 'tool' || it.kind === 'reasoning') {
+      if (it.kind === 'reasoning' && !it.text.trim() && !it.streaming) continue
       const last = blocks[blocks.length - 1]
-      if (last?.type === 'tools') last.items.push(it)
-      else blocks.push({ type: 'tools', id: it.id, items: [it] })
-    } else if (it.kind === 'reasoning') {
-      if (!it.text.trim() && !it.streaming) continue
-      blocks.push({ type: 'thought', item: it })
+      if (last?.type === 'work') last.entries.push(it)
+      else blocks.push({ type: 'work', id: it.id, entries: [it] })
     } else if (it.kind === 'assistant' && !it.text.trim() && !it.streaming) {
       continue
     } else {
@@ -70,8 +69,41 @@ function buildBlocks(items: TimelineItem[]): Block[] {
   return blocks
 }
 
+/** What a finished task did, shown on its final reply. */
+interface FinalInfo {
+  tools: ToolItem[]
+  startTs: number
+  endTs: number
+}
+
+/** The closing reply of each completed task that did real work (tools), keyed by item id. */
+function finalReplies(items: TimelineItem[], running: boolean): Map<string, FinalInfo> {
+  const out = new Map<string, FinalInfo>()
+  let start = 0
+  let tools: ToolItem[] = []
+  let last: AssistantItem | undefined
+  const close = (): void => {
+    if (last && tools.length) out.set(last.id, { tools, startTs: start, endTs: Math.max(last.ts, ...tools.map((t) => t.ts)) })
+  }
+  for (const it of items) {
+    if (it.parentId) continue
+    if (it.kind === 'user' && !it.queued) {
+      close()
+      start = it.ts
+      tools = []
+      last = undefined
+    } else if (it.kind === 'tool' && !/delegate_task$/.test(it.tool)) {
+      tools.push(it)
+      last = undefined // a reply followed by more work isn't the final one
+    } else if (it.kind === 'assistant' && it.text.trim()) last = it
+  }
+  if (!running) close()
+  return out
+}
+
 export function Timeline({ threadId, items, running }: { threadId: string; items: TimelineItem[]; running: boolean }): React.JSX.Element {
   const blocks = useMemo(() => buildBlocks(items), [items])
+  const finals = useMemo(() => finalReplies(items, running), [items, running])
   const children = useMemo(() => {
     const map: Record<string, TimelineItem[]> = {}
     for (const it of items) if (it.parentId) (map[it.parentId] ??= []).push(it)
@@ -85,13 +117,16 @@ export function Timeline({ threadId, items, running }: { threadId: string; items
   return (
     <div className="flex flex-col gap-3 pb-6">
       {blocks.map((b, i) => {
-        if (b.type === 'tools') return <ToolGroup key={b.id} items={b.items} childMap={children} live={running && i === blocks.length - 1} />
-        if (b.type === 'thought') return <Thought key={b.item.id} item={b.item} />
+        if (b.type === 'work') {
+          const live = running && i === blocks.length - 1
+          if (!b.entries.some((e) => e.kind === 'tool')) return b.entries.map((e) => <Thought key={e.id} item={e as ReasoningItem} />)
+          return <ToolGroup key={b.id} entries={b.entries} childMap={children} live={live} />
+        }
         const it = b.item
         if (it.kind === 'assistant') {
           const showLabel = it.agent !== lastAgent
           lastAgent = it.agent
-          return <AssistantMessage key={it.id} item={it} showLabel={showLabel} />
+          return <AssistantMessage key={it.id} item={it} showLabel={showLabel} final={finals.get(it.id)} />
         }
         if (it.kind === 'handoff') lastAgent = undefined
         return <ItemView key={it.id} item={it} threadId={threadId} />
@@ -171,7 +206,33 @@ function UserBubble({ item }: { item: Extract<TimelineItem, { kind: 'user' }> })
   )
 }
 
-function AssistantMessage({ item, showLabel }: { item: Extract<TimelineItem, { kind: 'assistant' }>; showLabel: boolean }): React.JSX.Element {
+function duration(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000))
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`
+}
+
+/** Header strip of the finished-task card: time taken, files changed (+/−), commands run. */
+function FinalHeader({ final }: { final: FinalInfo }): React.JSX.Element {
+  const edits = editedFiles(final.tools)
+  const commands = final.tools.filter((t) => t.toolKind === 'command').length
+  const failed = final.tools.filter((t) => t.status === 'error').length
+  return (
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-ok/15 px-3.5 py-2 text-[12px] text-fg-3">
+      <span className="flex items-center gap-1.5 font-medium text-ok">
+        <CheckCircle2 size={14} />
+        Done
+      </span>
+      <span>worked for {duration(final.endTs - final.startTs)}</span>
+      <span className="ml-auto flex items-center gap-2.5">
+        <EditSummary files={edits} />
+        {commands > 0 && <span>{commands === 1 ? '1 command' : `${commands} commands`}</span>}
+        {failed > 0 && <span className="text-danger/80">{failed} failed</span>}
+      </span>
+    </div>
+  )
+}
+
+function AssistantMessage({ item, showLabel, final }: { item: AssistantItem; showLabel: boolean; final?: FinalInfo }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const speakingId = useVoice((s) => s.speakingId)
   const speakError = useVoice((s) => (s.speakError?.id === item.id ? s.speakError.message : null))
@@ -191,7 +252,16 @@ function AssistantMessage({ item, showLabel }: { item: Extract<TimelineItem, { k
           {modelName && <span className="text-fg-4">· {modelName}</span>}
         </div>
       )}
-      <Markdown text={item.text} />
+      {final ? (
+        <div className="overflow-hidden rounded-xl border border-ok/25 bg-ok/[0.035] shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]">
+          <FinalHeader final={final} />
+          <div className="px-3.5 pt-2.5 pb-1">
+            <Markdown text={item.text} />
+          </div>
+        </div>
+      ) : (
+        <Markdown text={item.text} />
+      )}
       {item.streaming && <span className="ml-0.5 inline-block h-[1.1em] w-[7px] translate-y-[3px] animate-pulse rounded-[2px] bg-fg-3" />}
       {!item.streaming && item.text && (
         <div className={clsx('mt-1 flex h-6 items-center gap-0.5 transition-opacity duration-150 group-hover:opacity-100', speaking || speakError ? 'opacity-100' : 'opacity-0')}>
@@ -227,13 +297,13 @@ function AssistantMessage({ item, showLabel }: { item: Extract<TimelineItem, { k
   )
 }
 
-function Thought({ item }: { item: ReasoningItem }): React.JSX.Element {
+function Thought({ item, nested }: { item: ReasoningItem; nested?: boolean }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const secs = item.durationMs ? Math.max(1, Math.round(item.durationMs / 1000)) : null
   return (
-    <div className="fade-up">
-      <button onClick={() => setOpen(!open)} className="flex items-center gap-2 py-0.5 text-[13px] text-fg-3 transition-colors hover:text-fg-2">
-        <span className="tracking-[0.2em]">···</span>
+    <div className={nested ? 'px-2.5 py-1' : 'fade-up'}>
+      <button onClick={() => setOpen(!open)} className={clsx('flex items-center gap-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2', nested ? 'text-[12.5px]' : 'text-[13px]')}>
+        {nested ? <Sparkles size={12} className="text-fg-4" /> : <span className="tracking-[0.2em]">···</span>}
         <span className={clsx(item.streaming && 'shimmer-text')}>{item.streaming ? 'Thinking' : secs ? `Thought for ${secs}s` : 'Thought'}</span>
         <ChevronRight size={12} className={clsx('transition-transform', open && 'rotate-90')} />
       </button>
@@ -334,11 +404,14 @@ function EditSummary({ files }: { files: { file: string; added: number; removed:
   )
 }
 
-function ToolGroup({ items, childMap, live }: { items: ToolItem[]; childMap: Record<string, TimelineItem[]>; live: boolean }): React.JSX.Element {
+function ToolGroup({ entries, childMap, live }: { entries: WorkEntry[]; childMap: Record<string, TimelineItem[]>; live: boolean }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const items = useMemo(() => entries.filter((e): e is ToolItem => e.kind === 'tool'), [entries])
   const running = items.some((t) => t.status === 'running')
   const failed = items.filter((t) => t.status === 'error').length
   const current = [...items].reverse().find((t) => t.status === 'running')
+  const lastEntry = entries[entries.length - 1]
+  const thinking = live && lastEntry?.kind === 'reasoning' && lastEntry.streaming
   const edits = editedFiles(items)
   const rest = summarize(items, true)
   const sites = useMemo(() => {
@@ -346,30 +419,32 @@ function ToolGroup({ items, childMap, live }: { items: ToolItem[]; childMap: Rec
     for (const t of items) for (const site of sitesOf(t)) if (!all.has(site.host)) all.set(site.host, site)
     return [...all.values()]
   }, [items])
+  const busy = live && (running || thinking)
   return (
     <div className="fade-up">
       <button onClick={() => setOpen(!open)} className="group flex w-full items-center gap-2 py-0.5 text-left text-[13px] text-fg-3 transition-colors hover:text-fg-2">
         <span className="tracking-[0.2em]">···</span>
-        {running && live && current ? (
-          <span className="flex shrink-0 items-center gap-1.5">
-            {current.file && <FileIcon path={current.file} size={13} />}
-            <span className="shimmer-text">{current.title}</span>
-          </span>
-        ) : (
-          <span className="flex min-w-0 shrink-0 items-center gap-1.5">
-            <EditSummary files={edits} />
-            {rest && <span>{edits.length ? `· ${rest.charAt(0).toLowerCase()}${rest.slice(1)}` : rest}</span>}
-            <FaviconStack sites={sites} size={13} max={5} />
+        {/* The running tally stays visible and grows as the agent works: "Ran 3 commands". */}
+        <span className="flex min-w-0 shrink-0 items-center gap-1.5">
+          <EditSummary files={edits} />
+          {rest && <span>{edits.length ? `· ${rest.charAt(0).toLowerCase()}${rest.slice(1)}` : rest}</span>}
+          {!busy && <FaviconStack sites={sites} size={13} max={5} />}
+        </span>
+        {busy && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="text-fg-4">·</span>
+            {current?.file && <FileIcon path={current.file} size={13} />}
+            <span className="shimmer-text truncate">{current ? current.title : 'Thinking'}</span>
           </span>
         )}
-        {failed > 0 && !running && <span className="text-danger/80">· {failed} failed</span>}
-        {running && live ? <div className="squiggle ml-1 min-w-8 flex-1" /> : <ChevronRight size={12} className={clsx('shrink-0 transition-transform', open && 'rotate-90')} />}
+        {failed > 0 && !running && <span className="shrink-0 text-danger/80">· {failed} failed</span>}
+        {busy ? <div className="squiggle ml-1 min-w-8 flex-1" /> : <ChevronRight size={12} className={clsx('shrink-0 transition-transform', open && 'rotate-90')} />}
       </button>
       {open && (
         <div className="mt-1.5 flex flex-col gap-0.5 rounded-xl border border-line-soft bg-raised/50 p-1">
-          {items.map((t) => (
-            <ToolRow key={t.id} item={t} childItems={childMap[t.id]} childMap={childMap} />
-          ))}
+          {entries.map((e) =>
+            e.kind === 'tool' ? <ToolRow key={e.id} item={e} childItems={childMap[e.id]} childMap={childMap} /> : <Thought key={e.id} item={e} nested />
+          )}
         </div>
       )}
     </div>

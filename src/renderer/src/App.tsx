@@ -9,7 +9,8 @@ import { SettingsView } from './settings/Settings'
 import { Onboarding } from './settings/Onboarding'
 import { AgentIcon } from './components/ui'
 import { SidePanel } from './components/SidePanel'
-import { refreshCache, speak } from './voice/voice'
+import { refreshCache } from './voice/voice'
+import { startNarrator } from './voice/narrator'
 import { CrashScreen } from './components/ErrorBoundary'
 
 export function App(): React.JSX.Element {
@@ -77,21 +78,8 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
-  // Read finished replies aloud when enabled (hands-free mode with dictation).
-  useEffect(() => {
-    const wasRunning = new Map<string, boolean>()
-    return useStore.subscribe((st) => {
-      for (const t of Object.values(st.threads)) {
-        const before = wasRunning.get(t.id)
-        wasRunning.set(t.id, !!t.running)
-        if (before && !t.running && st.settings.ttsEnabled && st.settings.ttsAutoRead && t.id === st.activeId) {
-          const items = st.items[t.id] ?? []
-          const last = [...items].reverse().find((i) => i.kind === 'assistant' && !i.parentId)
-          if (last && last.kind === 'assistant' && last.text.trim()) void speak(last.id, last.text, st.settings.ttsVoice, st.settings.ttsSpeed).catch(() => {})
-        }
-      }
-    })
-  }, [])
+  // Read replies aloud: as the agent works, or when it finishes (see Settings → Voice).
+  useEffect(() => startNarrator(), [])
 
   // Theme, accent and font size live on <html> as CSS variables.
   useEffect(() => {

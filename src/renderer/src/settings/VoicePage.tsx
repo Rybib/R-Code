@@ -249,8 +249,25 @@ export function VoicePage(): React.JSX.Element {
         <Row label="Enable read-aloud" hint="Adds a speaker button to every agent reply.">
           <Toggle checked={s.ttsEnabled} onChange={(v) => void setSettings({ ttsEnabled: v })} />
         </Row>
-        <Row label="Read replies aloud automatically" hint="Speaks each finished reply — great with dictation for hands-free coding.">
-          <Toggle checked={s.ttsAutoRead} onChange={(v) => void setSettings({ ttsAutoRead: v })} />
+        <Row
+          label="Read replies aloud"
+          hint={
+            s.ttsLiveRead
+              ? 'Narrates as the agent works: each update is read as soon as it’s written, then the final answer.'
+              : s.ttsAutoRead
+                ? 'Reads the final reply once the agent finishes.'
+                : 'Only when you press play on a message.'
+          }
+        >
+          <Select
+            value={s.ttsLiveRead ? 'live' : s.ttsAutoRead ? 'finished' : 'off'}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'finished', label: 'When a reply finishes' },
+              { value: 'live', label: 'As it works' }
+            ]}
+            onChange={(v) => void setSettings({ ttsLiveRead: v === 'live', ttsAutoRead: v === 'finished' })}
+          />
         </Row>
         <Row label="Voice">
           <Select value={s.ttsVoice} options={KOKORO_VOICES.map((v) => ({ value: v.id, label: v.label }))} onChange={(v) => void setSettings({ ttsVoice: v })} />
