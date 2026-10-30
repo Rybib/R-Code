@@ -2,7 +2,7 @@
 
 /* R-Code design tokens — modeled on Poolside's calm charcoal palette. */
 :root {
-  --accent: #5b6cff;
+  --accent: #3773ef;
   --chat-font-size: 15px;
   --code-font: 'SF Mono', Menlo, ui-monospace, monospace;
 
@@ -327,4 +327,19 @@ button {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Equalizer bars in the "Now reading" pill. */
+@keyframes sound-bar {
+  0%,
+  100% {
+    height: 30%;
+  }
+  50% {
+    height: 100%;
+  }
+}
+.sound-bar {
+  height: 30%;
+  animation: sound-bar 0.9s ease-in-out infinite;
 }

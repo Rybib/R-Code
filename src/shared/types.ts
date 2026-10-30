@@ -238,7 +238,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   onboarded: false,
   theme: 'dark',
-  accent: '#5b6cff',
+  accent: '#3773ef',
   chatFontSize: 15,
   codeFontFamily: 'Menlo',
   translucent: false,

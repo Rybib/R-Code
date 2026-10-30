@@ -253,7 +253,7 @@ export function VoicePage(): React.JSX.Element {
           label="Read replies aloud"
           hint={
             s.ttsLiveRead
-              ? 'Narrates as the agent works: each update is read as soon as it’s written, then the final answer.'
+              ? 'Narrates as the agent works: each update is read as soon as it’s written, and the final answer once it’s complete.'
               : s.ttsAutoRead
                 ? 'Reads the final reply once the agent finishes.'
                 : 'Only when you press play on a message.'

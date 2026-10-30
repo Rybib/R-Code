@@ -38,6 +38,8 @@ interface VoiceState {
   transcribing: boolean
   level: number
   speakingId: string | null
+  /** Read-aloud is paused (the current clip holds its place). */
+  paused: boolean
   /** Why the last read-aloud failed, shown next to the play button. */
   speakError: { id: string; message: string } | null
   cached: Record<string, boolean>
@@ -50,6 +52,7 @@ export const useVoice = create<VoiceState>(() => ({
   transcribing: false,
   level: 0,
   speakingId: null,
+  paused: false,
   speakError: null,
   cached: {}
 }))
@@ -293,6 +296,9 @@ export function speakableText(md: string): string {
     .replace(/^#+\s*/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/[*_~>|]/g, '')
+    // Emoji sound odd spoken ("rocket", "check mark button"): drop them, keep the words.
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\u{1F3FB}-\u{1F3FF}\u200D\uFE0F\u20E3]/gu, '')
+    .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{2,}/g, '\n')
     .trim()
 }
@@ -315,6 +321,7 @@ function chunkText(text: string, max = 260): string[] {
 export function stopSpeaking(): void {
   speakToken++
   narration.length = 0
+  if (pausedAt) resumeSpeaking()
   try {
     playing?.stop()
   } catch {
@@ -322,6 +329,26 @@ export function stopSpeaking(): void {
   }
   playing = null
   useVoice.setState({ speakingId: null })
+}
+
+// Pause/resume: the playback context is suspended in place; time spent paused doesn't count
+// toward the stalled-clip watchdog, and the next clip waits until you resume.
+let pausedAt = 0
+let pausedTotal = 0
+
+export function pauseSpeaking(): void {
+  if (pausedAt || !useVoice.getState().speakingId) return
+  pausedAt = Date.now()
+  void playCtx?.suspend().catch(() => {})
+  useVoice.setState({ paused: true })
+}
+
+export function resumeSpeaking(): void {
+  if (!pausedAt) return
+  pausedTotal += Date.now() - pausedAt
+  pausedAt = 0
+  void playCtx?.resume().catch(() => {})
+  useVoice.setState({ paused: false })
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -366,6 +393,7 @@ async function generate(text: string, voice: string, speed: number): Promise<any
 
 /** Play one generated clip to the end (or until speech is stopped). */
 async function playClip(res: { samples: Float32Array<ArrayBuffer>; sampleRate: number }, token: number): Promise<void> {
+  while (pausedAt && token === speakToken) await sleep(150)
   const ctx = await playbackContext()
   if (token !== speakToken) return
   const buffer = ctx.createBuffer(1, res.samples.length, res.sampleRate)
@@ -374,11 +402,21 @@ async function playClip(res: { samples: Float32Array<ArrayBuffer>; sampleRate: n
     const src = ctx.createBufferSource()
     src.buffer = buffer
     src.connect(ctx.destination)
-    src.onended = () => resolve(true)
     playing = src
     src.start()
-    // If the clip never reports finishing, the context is stuck: don't hang forever.
-    setTimeout(() => resolve(false), (buffer.duration / Math.max(0.1, src.playbackRate.value)) * 1000 + 2000)
+    // If the clip never reports finishing (and isn't paused), the context is stuck: move on.
+    const limit = buffer.duration * 1000 + 2000
+    const started = Date.now()
+    const pausedBefore = pausedTotal
+    const watchdog = setInterval(() => {
+      const pausedNow = pausedTotal - pausedBefore + (pausedAt ? Date.now() - pausedAt : 0)
+      if (Date.now() - started - pausedNow > limit) finish(false)
+    }, 500)
+    const finish = (ok: boolean): void => {
+      clearInterval(watchdog)
+      resolve(ok)
+    }
+    src.onended = () => finish(true)
   })
   if (!ended && playCtx === ctx) {
     void ctx.close().catch(() => {})
@@ -433,6 +471,7 @@ async function runNarration(voice: string, speed: number): Promise<void> {
       const item = ahead?.item ?? narration.shift()
       if (!item || token !== speakToken) break
       current = item
+      useVoice.setState({ speakingId: item.id })
       const clip = await (ahead?.clip ?? generate(item.text, voice, speed))
       ahead = null
       if (token !== speakToken) break

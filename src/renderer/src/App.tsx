@@ -11,6 +11,7 @@ import { AgentIcon } from './components/ui'
 import { SidePanel } from './components/SidePanel'
 import { refreshCache } from './voice/voice'
 import { startNarrator } from './voice/narrator'
+import { NowReading } from './components/NowReading'
 import { CrashScreen } from './components/ErrorBoundary'
 
 export function App(): React.JSX.Element {
@@ -117,6 +118,7 @@ export function App(): React.JSX.Element {
           )}
         </div>
       </main>
+      <NowReading />
       {searchOpen && <SearchPalette />}
       {!settings.onboarded && <Onboarding />}
     </div>

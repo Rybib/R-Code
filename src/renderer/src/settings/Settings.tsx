@@ -87,7 +87,7 @@ export function PageTitle({ title, subtitle }: { title: string; subtitle?: strin
   )
 }
 
-const ACCENTS = ['#5b6cff', '#3773ef', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#06b6d4']
+const ACCENTS = ['#3773ef', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#06b6d4']
 
 function GeneralPage(): React.JSX.Element {
   const s = useStore((st) => st.settings)

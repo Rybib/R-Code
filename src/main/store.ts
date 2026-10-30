@@ -32,6 +32,8 @@ let settingsCache: Settings | null = null
 export function getSettings(): Settings {
   if (!settingsCache) {
     const saved = readJson<Partial<Settings>>(join(root(), 'settings.json'), {})
+    // The default accent moved from indigo to blue; installs still on the old default follow it.
+    if (saved.accent === '#5b6cff') delete saved.accent
     settingsCache = {
       ...DEFAULT_SETTINGS,
       ...saved,

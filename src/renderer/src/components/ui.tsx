@@ -6,14 +6,14 @@ import { useStore } from '../store'
 
 export function Logo({ size = 140, className }: { size?: number; className?: string }): React.JSX.Element {
   // R-Code's mark: an open ring (the "C" of Code) with a bold R whose leg sweeps out
-  // through the opening — glassy indigo, in the spirit of Poolside's hero mark.
+  // through the opening — glassy blue, in the spirit of Poolside's hero mark.
   return (
     <svg width={size} height={size} viewBox="0 0 160 160" className={className} aria-hidden>
       <defs>
         <linearGradient id="rc-fill" x1="24" y1="16" x2="140" y2="148" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#a3adff" />
-          <stop offset="0.5" stopColor="#5b5ff0" />
-          <stop offset="1" stopColor="#2b2b94" />
+          <stop offset="0" stopColor="#9cc3ff" />
+          <stop offset="0.5" stopColor="#3773ef" />
+          <stop offset="1" stopColor="#173f9e" />
         </linearGradient>
         <linearGradient id="rc-shine" x1="30" y1="20" x2="120" y2="140" gradientUnits="userSpaceOnUse">
           <stop offset="0" stopColor="#ffffff" stopOpacity="0.75" />
@@ -21,8 +21,8 @@ export function Logo({ size = 140, className }: { size?: number; className?: str
           <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
         </linearGradient>
         <radialGradient id="rc-glow" cx="80" cy="84" r="78" gradientUnits="userSpaceOnUse">
-          <stop offset="0.5" stopColor="#5b5ff0" stopOpacity="0.28" />
-          <stop offset="1" stopColor="#5b5ff0" stopOpacity="0" />
+          <stop offset="0.5" stopColor="#3773ef" stopOpacity="0.28" />
+          <stop offset="1" stopColor="#3773ef" stopOpacity="0" />
         </radialGradient>
       </defs>
       <circle cx="80" cy="82" r="76" fill="url(#rc-glow)" />

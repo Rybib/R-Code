@@ -116,7 +116,7 @@ export function Hero(): React.JSX.Element {
     <div className="relative flex h-full flex-col">
       <div className="hero-grid pointer-events-none absolute inset-0" />
       <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-8">
-        <Logo size={150} className="mb-10 drop-shadow-[0_20px_40px_rgba(91,95,240,0.25)]" />
+        <Logo size={150} className="mb-10 drop-shadow-[0_20px_40px_rgba(55,115,239,0.25)]" />
         <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-[17px] text-fg-2">
           <span>Start a new conversation in</span>
           <button ref={btn} onClick={() => setMenu(true)} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-raised-2/80 px-2.5 text-[15px] text-fg transition-colors hover:bg-frame-active">

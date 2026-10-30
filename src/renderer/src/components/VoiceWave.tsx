@@ -36,7 +36,7 @@ export function VoiceWave({ onCancel }: { onCancel: () => void }): React.JSX.Ele
     const c = canvas.current
     if (!c) return
     const ctx = c.getContext('2d')!
-    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#5b5ff0'
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#3773ef'
     const bars: number[] = []
     let buf: Uint8Array<ArrayBuffer> | null = null
     let last = performance.now()
