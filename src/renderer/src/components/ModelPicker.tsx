@@ -4,6 +4,7 @@ import { Check, ChevronDown, Cpu, Search, Star, Gauge, Settings2 } from 'lucide-
 import { AGENT_IDS, AGENT_LABELS, PERMISSION_LABELS, type AgentId, type ModelOption, type PermissionMode } from '@shared/types'
 import { useStore } from '../store'
 import { AgentIcon, MenuItem, Popover, Spinner } from './ui'
+import { EffortSlider } from './EffortSlider'
 
 export interface Selection {
   agent: AgentId
@@ -118,7 +119,6 @@ export function ModelPicker({
       >
         <AgentIcon agent={value.agent} size={variant === 'hero' ? 15 : 13} />
         <span className="truncate">{label}</span>
-        {value.effort && variant === 'composer' && <span className="text-fg-4">· {value.effort}</span>}
         <ChevronDown size={12} className="shrink-0 text-fg-3" />
       </button>
       <Popover anchor={btn.current} open={open} onClose={() => setOpen(false)} placement={placement} className="w-[340px]">
@@ -169,21 +169,17 @@ export function ModelPicker({
             )
           })}
         </div>
-        {current?.efforts && current.efforts.length > 0 && (
-          <div className="flex items-center gap-1 border-t border-line-soft px-2 pt-2 pb-1">
-            <Gauge size={13} className="mr-1 text-fg-3" />
-            <span className="mr-1 text-[12px] text-fg-3">Effort</span>
-            <div className="flex flex-1 flex-wrap gap-1">
-              {current.efforts.map((e) => (
-                <button
-                  key={e}
-                  onClick={() => onChange({ ...value, effort: e })}
-                  className={clsx('rounded-md px-2 py-0.5 text-[12px] transition-colors', (value.effort ?? current.defaultEffort) === e ? 'bg-accent text-white' : 'text-fg-2 hover:bg-frame-hover')}
-                >
-                  {e}
-                </button>
-              ))}
+        {current?.efforts && current.efforts.length > 1 && (
+          <div className="border-t border-line-soft px-1.5 pt-2.5 pb-1">
+            <div className="mb-1.5 flex items-center gap-1.5 px-1">
+              <Gauge size={13} className="text-fg-3" />
+              <span className="text-[12px] text-fg-3">Effort</span>
             </div>
+            <EffortSlider
+              efforts={current.efforts}
+              value={value.effort && current.efforts.includes(value.effort) ? value.effort : (current.defaultEffort ?? current.efforts[0])}
+              onChange={(e) => onChange({ ...value, effort: e })}
+            />
           </div>
         )}
       </Popover>

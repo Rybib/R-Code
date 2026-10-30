@@ -199,25 +199,40 @@ class PiSession implements AgentSession {
         env.RCODE_BRIDGE_TOKEN = init.bridge.token
         env.RCODE_TOOLS = piToolsJson(!init.allowDelegation)
       }
-      const rpc = new PiRpc(args, init.cwd, env)
-      this.rpc = rpc
+      const start = async (extra: string[]): Promise<PiRpc> => {
+        const rpc = new PiRpc([...args, ...extra], init.cwd, env)
+        this.rpc = rpc
+        rpc.onEvent = (ev) => this.onEvent(ev)
+        rpc.onExit = () => {
+          if (this.rpc !== rpc) return
+          this.rpc = null
+          this.ready = null
+          if (this.running) {
+            this.running = false
+            init.sink.turnDone({ error: `Pi exited unexpectedly. ${rpc.stderr.slice(-400)}` })
+          }
+        }
+        const state = await rpc.request({ type: 'get_state' }, 30000)
+        if (state?.sessionFile) {
+          this.sessionFile = state.sessionFile
+          init.sink.setSessionId(state.sessionFile)
+        }
+        return rpc
+      }
+      let rpc: PiRpc
+      try {
+        rpc = await start([])
+      } catch (err) {
+        // A broken third-party extension in ~/.pi makes Pi refuse to start. Run without the
+        // user's extensions (R-Code's own still load via --extension) rather than failing the chat.
+        const failed = String((err as Error)?.message ?? err).match(/Failed to load extension "([^"]+)"/)
+        if (!failed || (init.bridge && failed[1] === init.bridge.piExtension)) throw err
+        this.rpc?.kill()
+        rpc = await start(['--no-extensions'])
+        init.sink.notice(`Pi couldn't load your extension ${shortPath(failed[1])}, so this chat runs without your Pi extensions. R-Code's tools are still available.`, 'warn')
+      }
       this.currentModel = input.model
       this.currentThinking = thinking
-      rpc.onEvent = (ev) => this.onEvent(ev)
-      rpc.onExit = () => {
-        if (this.rpc !== rpc) return
-        this.rpc = null
-        this.ready = null
-        if (this.running) {
-          this.running = false
-          init.sink.turnDone({ error: `Pi exited unexpectedly. ${rpc.stderr.slice(-400)}` })
-        }
-      }
-      const state = await rpc.request({ type: 'get_state' }, 30000)
-      if (state?.sessionFile) {
-        this.sessionFile = state.sessionFile
-        init.sink.setSessionId(state.sessionFile)
-      }
       await rpc.request({ type: 'set_auto_compaction', enabled: init.settings.autoCompact }).catch(() => {})
     })()
     this.ready.catch(() => {

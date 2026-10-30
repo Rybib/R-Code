@@ -63,8 +63,7 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "node_modules/@earendil-works/**",
-      "node_modules/@anthropic-ai/claude-agent-sdk-darwin-*/**"
+      "node_modules/**"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

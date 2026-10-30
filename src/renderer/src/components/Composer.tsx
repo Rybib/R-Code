@@ -5,6 +5,7 @@ import { AGENT_LABELS, type AgentId, type ImageAttachment, type PermissionMode }
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { ModelPicker, PermissionPicker, type Selection } from './ModelPicker'
+import { EffortControl } from './EffortSlider'
 import { cancelRecording, startRecording, stopRecordingAndTranscribe, useVoice } from '../voice/voice'
 
 const NO_IMAGES: ImageAttachment[] = []
@@ -203,6 +204,7 @@ export function Composer({
           <span className="mr-1 text-[11.5px] text-fg-3">Loading Whisper {Math.round(sttStatus.progress * 100)}%</span>
         )}
         <ModelPicker value={selection} onChange={onSelection} />
+        <EffortControl value={selection} onChange={onSelection} />
         <button
           title={recording ? 'Stop and transcribe (⌥Space)' : 'Dictate with Whisper (⌥Space)'}
           onClick={() => void toggleMic()}
