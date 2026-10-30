@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { existsSync } from 'node:fs'
+import { basename } from 'node:path'
 import {
   AGENT_LABELS,
   type AgentId,
@@ -122,7 +123,40 @@ export class Orchestrator {
   update(id: string, patch: Partial<Pick<Thread, 'title' | 'archived' | 'settledAt' | 'pinned' | 'permissionMode' | 'model' | 'effort' | 'agent' | 'projectPath'>>): void {
     const t = this.threads.get(id)
     if (!t) return
+    if ('projectPath' in patch) {
+      const { projectPath, ...rest } = patch
+      this.setProject(id, projectPath || undefined)
+      patch = rest
+    }
     Object.assign(t, patch)
+    this.touch(t)
+  }
+
+  /**
+   * Move a chat to another project folder (or to none). Agent sessions are tied to the folder
+   * they started in, so they're closed here; each agent's next turn starts fresh in the new
+   * folder and is handed the whole conversation so far.
+   */
+  setProject(id: string, projectPath: string | undefined): void {
+    const t = this.threads.get(id)
+    if (!t || (t.projectPath || undefined) === projectPath) return
+    if (this.running.has(id)) throw new Error('Wait for the agent to finish before moving this chat to another project.')
+    this.disposeSessions(id)
+    const hadContext = [...Object.keys(t.agentSessions), ...Object.keys(t.agentSeenUpTo)] as AgentId[]
+    t.contextResync = [...new Set([...(t.contextResync ?? []), ...hadContext])]
+    t.agentSessions = {}
+    t.agentSeenUpTo = {}
+    t.projectPath = projectPath
+    const where = projectPath ? `project ${basename(projectPath)}` : 'no project'
+    const note: TimelineItem = {
+      kind: 'notice',
+      id: uid('n'),
+      ts: Date.now(),
+      tone: 'info',
+      text: t.items.length ? `Moved this chat to ${where}. The next reply starts there with the conversation so far.` : `This chat is now in ${where}.`
+    }
+    t.items.push(note)
+    this.emit({ type: 'item', threadId: id, item: note })
     this.touch(t)
   }
 
@@ -292,7 +326,11 @@ export class Orchestrator {
     if (t.seedContext && !t.agentSeenUpTo[agent] && Object.keys(t.agentSeenUpTo).length === 0) {
       parts.push(`Summary carried over from a previous chat:\n${t.seedContext}`)
     }
-    if (settings.shareContextAcrossAgents) {
+    if (t.contextResync?.includes(agent)) {
+      // This agent's earlier session was closed (the chat moved project): give it everything.
+      const digest = digestItems(t.items.slice(0, uptoExclusive), t.projectPath)
+      if (digest.trim()) parts.push(`Conversation so far (this chat just moved to ${t.projectPath ?? 'no project'}, so you are starting a new session there):\n${digest}`)
+    } else if (settings.shareContextAcrossAgents) {
       const seen = t.agentSeenUpTo[agent] ?? 0
       const slice = t.items.slice(seen, uptoExclusive)
       const foreign = slice.some((i) => i.kind === 'assistant' && i.agent !== agent)
@@ -348,6 +386,7 @@ export class Orchestrator {
     t.plan = t.plan?.every((s) => s.status === 'completed') ? undefined : t.plan
 
     const contextBlock = this.contextFor(t, agent, t.items.length)
+    if (t.contextResync?.includes(agent)) t.contextResync = t.contextResync.filter((a) => a !== agent)
     const userItem: TimelineItem = { kind: 'user', id: uid('u'), ts: Date.now(), text: opts.text, images: opts.images, agent }
     t.items.push(userItem)
     this.emit({ type: 'item', threadId, item: userItem })

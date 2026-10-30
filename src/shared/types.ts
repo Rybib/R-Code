@@ -139,6 +139,8 @@ export interface Thread {
   agentSessions: Partial<Record<AgentId, string>>
   /** Index into `items` up to which each agent has seen the conversation. */
   agentSeenUpTo: Partial<Record<AgentId, number>>
+  /** Agents whose session was reset (e.g. the chat moved project): their next turn gets the full history. */
+  contextResync?: AgentId[]
   parentThreadId?: string
   archived?: boolean
   /** When the chat was settled: done for now, tucked into the sidebar's Settled section. */

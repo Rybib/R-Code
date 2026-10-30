@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Globe, Smartphone, ChevronDown, CircleCheck, Circle, FolderOpen, GitBranch, PanelLeft, Plus, X, Loader, Sparkles, FolderPlus, Home, ChevronUp } from 'lucide-react'
+import { Globe, Smartphone, ChevronDown, CircleCheck, Circle, FolderOpen, PanelLeft, Plus, X, Loader, Sparkles, FolderPlus, Home, ChevronUp } from 'lucide-react'
 import type { PermissionMode } from '@shared/types'
 import { useStore, defaultModelFor } from '../store'
 import { api } from '../lib/api'
 import { Composer } from './Composer'
 import { Timeline } from './Timeline'
 import { ContextMeter, UsageMeter } from './Metrics'
+import { ProjectSwitcher } from './ProjectSwitcher'
 import { ModelPicker, type Selection } from './ModelPicker'
 import { AgentIcon, IconButton, Logo, MenuItem, Popover } from './ui'
 
@@ -21,7 +22,6 @@ export function TabBar(): React.JSX.Element {
   const selectTab = useStore((s) => s.selectTab)
   const closeTab = useStore((s) => s.closeTab)
   const newTab = useStore((s) => s.newTab)
-  const active = activeId ? threads[activeId] : undefined
   const panel = useStore((s) => s.panel)
 
   return (
@@ -80,11 +80,7 @@ export function TabBar(): React.JSX.Element {
       </div>
       {view === 'chat' && (
         <div className="mb-[7px] flex items-center gap-0.5">
-          {active?.projectPath && (
-            <IconButton title="Open project in Finder" onClick={() => void api.openPath(active.projectPath!)}>
-              <FolderOpen size={15} />
-            </IconButton>
-          )}
+          {activeId && <ProjectSwitcher threadId={activeId} variant="toolbar" />}
           <IconButton title="Built-in browser" active={panel === 'browser'} onClick={() => set({ panel: panel === 'browser' ? null : 'browser' })}>
             <Globe size={15} />
           </IconButton>
@@ -215,12 +211,7 @@ export function ChatView({ threadId }: { threadId: string }): React.JSX.Element 
       <div className="mx-auto w-full max-w-[760px] px-6 pb-5">
         {thread.plan && thread.plan.length > 0 && <PlanCard threadId={threadId} />}
         <div className="mb-2 flex items-center gap-2">
-          {(branch || thread.projectPath) && (
-            <div className="flex h-7 items-center gap-1.5 rounded-lg border border-line-soft bg-raised/50 px-2.5 font-mono text-[11.5px] text-fg-2">
-              <GitBranch size={12} className="text-fg-3" />
-              {branch ?? thread.projectPath?.split('/').pop()}
-            </div>
-          )}
+          <ProjectSwitcher threadId={threadId} variant="pill" branch={branch} />
           <div className="flex-1" />
           <UsageMeter agent={selection.agent} />
           {pct !== null && <ContextMeter pct={pct} tokens={usage!.contextTokens!} window={usage!.contextWindow!} threadId={threadId} running={!!thread.running} cost={usage?.costUsd} />}
