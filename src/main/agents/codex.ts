@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { AgentStatus, ModelOption, PermissionMode, PlanUsage, Settings, UsageWindow } from '@shared/types'
 import { jsonLines, run, which } from '../env'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
@@ -133,8 +135,17 @@ function policyFor(mode: PermissionMode, settings: Settings, cwd: string): { app
 function workspaceWrite(settings: Settings, cwd: string): any {
   if (settings.codexSandbox === 'danger-full-access') return { type: 'dangerFullAccess' }
   if (settings.codexSandbox === 'read-only') return { type: 'readOnly', networkAccess: true }
-  return { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+  return { type: 'workspaceWrite', writableRoots: [cwd, ...XCODE_ROOTS.filter(existsSync)], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
 }
+
+// Where xcodebuild and SwiftPM write (DerivedData, simulator data, package caches). Without
+// these a sandboxed Codex can't build Apple projects even inside its own workspace.
+const XCODE_ROOTS = [
+  join(homedir(), 'Library/Developer'),
+  join(homedir(), 'Library/Caches/org.swift.swiftpm'),
+  join(homedir(), 'Library/org.swift.swiftpm'),
+  join(homedir(), 'Library/Caches/com.apple.dt.xcodebuild')
+]
 
 /** Codex sends unified hunks for updates but may send raw contents for adds/deletes. */
 function normalizeChangeDiff(c: { kind?: { type?: string }; diff?: string }): string {

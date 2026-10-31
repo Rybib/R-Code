@@ -16,6 +16,17 @@ export interface SimDevice {
   name: string
   state: string
   runtime: string
+  /** e.g. com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M3 */
+  type?: string
+}
+
+const deviceTypes = new Map<string, string>() // udid -> device type (or name)
+
+/** Points-to-pixels scale: every iPad is 2x; iPhones are 3x except the narrow 2x models. */
+async function screenScale(udid: string, pixelWidth: number): Promise<number> {
+  if (!deviceTypes.has(udid)) await listDevices()
+  if (/ipad/i.test(deviceTypes.get(udid) ?? '')) return 2
+  return pixelWidth > 1000 ? 3 : 2
 }
 
 export async function listDevices(): Promise<SimDevice[]> {
@@ -25,7 +36,10 @@ export async function listDevices(): Promise<SimDevice[]> {
   const out: SimDevice[] = []
   for (const [runtime, devices] of Object.entries<any[]>(j.devices ?? {})) {
     const rt = runtime.replace('com.apple.CoreSimulator.SimRuntime.', '').replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/-/g, ' ')
-    for (const d of devices) out.push({ udid: d.udid, name: d.name, state: d.state, runtime: rt })
+    for (const d of devices) {
+      out.push({ udid: d.udid, name: d.name, state: d.state, runtime: rt, type: d.deviceTypeIdentifier })
+      deviceTypes.set(d.udid, d.deviceTypeIdentifier ?? d.name)
+    }
   }
   // Booted first, then iPhones, newest runtime first.
   return out.sort((a, b) => Number(b.state === 'Booted') - Number(a.state === 'Booted') || Number(b.name.startsWith('iPhone')) - Number(a.name.startsWith('iPhone')) || b.runtime.localeCompare(a.runtime))
@@ -62,7 +76,8 @@ export async function screenshot(udid: string, maxWidth = 900): Promise<{ data: 
   const size = img.getSize()
   const scaled = size.width > maxWidth ? img.resize({ width: maxWidth, quality: 'good' }) : img
   rmSync(file, { force: true })
-  return { data: scaled.toPNG().toString('base64'), width: size.width, height: size.height, scale: size.width > 1000 ? 3 : 2 }
+  // Landscape screenshots are wider than tall, so judge by the shorter side.
+  return { data: scaled.toPNG().toString('base64'), width: size.width, height: size.height, scale: await screenScale(udid, Math.min(size.width, size.height)) }
 }
 
 /** AXe ships inside R-Code (Resources/axe); a separately installed `axe` on PATH is the fallback. */
@@ -168,7 +183,9 @@ export async function buildAndRun(opts: { cwd: string; path?: string; scheme?: s
     return { text: `Build failed for scheme ${scheme}.\n\n${errors.join('\n') || lastLines.join('\n')}`, isError: true }
   }
   const products = join(derived, 'Build', 'Products', `${opts.configuration ?? 'Debug'}-iphonesimulator`)
-  const app = existsSync(products) ? readdirSync(products).find((f) => f.endsWith('.app')) : undefined
+  // Prefer the scheme's own app over others built alongside it (test runners, helper apps).
+  const apps = existsSync(products) ? readdirSync(products).filter((f) => f.endsWith('.app')) : []
+  const app = apps.find((f) => f === `${scheme}.app`) ?? apps.find((f) => !f.endsWith('-Runner.app')) ?? apps[0]
   if (!app) return { text: `Build succeeded but no .app was found in ${products}.`, isError: true }
   const appPath = join(products, app)
   let bundleId = ''
@@ -226,7 +243,7 @@ export function iosTools(notify: (c: string, p: unknown) => void, cwdFor: (threa
     {
       name: 'ios_build_and_run',
       description:
-        'Build the Xcode project/workspace in the current project with xcodebuild, install it on an iOS simulator and launch it. Returns compiler errors on failure, or a screenshot of the running app.',
+        'Build the Xcode project/workspace in the current project with xcodebuild, install it on an iOS simulator and launch it. Returns compiler errors on failure, or a screenshot of the running app. Runs outside any agent sandbox, so prefer it (and the other ios_* tools) over calling xcodebuild or xcrun simctl yourself.',
       schema: {
         type: 'object',
         properties: {

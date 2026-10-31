@@ -77,7 +77,12 @@
       "hardenedRuntime": false,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "R-Code uses the microphone for on-device Whisper dictation.",
-        "NSAppleEventsUsageDescription": "R-Code opens Terminal for agent sign-in."
+        "NSAppleEventsUsageDescription": "R-Code and its coding agents use Apple Events to open Terminal for sign-in and to control apps you ask them to.",
+        "NSDesktopFolderUsageDescription": "Your coding agents read and change files in Desktop when you work there.",
+        "NSDocumentsFolderUsageDescription": "Your coding agents read and change files in Documents when you work there.",
+        "NSDownloadsFolderUsageDescription": "Your coding agents read and change files in Downloads when you ask them to.",
+        "NSRemovableVolumesUsageDescription": "Your coding agents read and change files on external drives when you ask them to.",
+        "NSNetworkVolumesUsageDescription": "Your coding agents read and change files on network drives when you ask them to."
       }
     },
     "dmg": {

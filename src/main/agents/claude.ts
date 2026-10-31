@@ -201,7 +201,8 @@ class ClaudeSession implements AgentSession {
         effort: (CLAUDE_EFFORTS.includes(input.effort ?? '') ? input.effort : undefined) as any,
         resume: this.sessionId,
         permissionMode: PERMISSION_MAP[input.permissionMode],
-        allowDangerouslySkipPermissions: input.permissionMode === 'allowAll',
+        // Only makes "Allow all" available; without it, switching a running chat to it fails.
+        allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
         settingSources: ['user', 'project', 'local'],
         systemPrompt: { type: 'preset', preset: 'claude_code', append: init.instructions },
@@ -461,10 +462,16 @@ class ClaudeSession implements AgentSession {
         this.currentModel = input.model
       }
       if (input.permissionMode !== this.currentMode) {
-        await this.q.setPermissionMode(PERMISSION_MAP[input.permissionMode]).catch(() => {})
-        this.currentMode = input.permissionMode
+        const ok = await this.q.setPermissionMode(PERMISSION_MAP[input.permissionMode]).then(
+          () => true,
+          (err) => (console.error('[claude] setPermissionMode', err?.message ?? err), false)
+        )
+        // A mode the running CLI refuses takes effect by resuming the session in it.
+        if (ok) this.currentMode = input.permissionMode
+        else this.closeQuery()
       }
     }
+    if (!this.q) this.start(input)
     const content: any[] = []
     for (const img of input.images ?? []) {
       content.push({ type: 'image', source: { type: 'base64', media_type: img.mimeType, data: img.data } })
