@@ -30,7 +30,7 @@ const PAGES: { id: SettingsPage; label: string; icon: React.ComponentType<{ size
   { id: 'general', label: 'General', icon: Settings2 },
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'models', label: 'Models & Providers', icon: Boxes },
-  { id: 'tools', label: 'Browser, iOS & Web', icon: Wrench },
+  { id: 'tools', label: 'Agent tools', icon: Wrench },
   { id: 'voice', label: 'Voice', icon: Mic },
   { id: 'orchestration', label: 'Context & Orchestration', icon: Network },
   { id: 'shortcuts', label: 'Keyboard Shortcuts', icon: Keyboard },

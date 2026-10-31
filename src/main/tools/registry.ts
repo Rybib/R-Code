@@ -1,4 +1,4 @@
-import type { AgentId } from '@shared/types'
+import type { AgentId, Settings } from '@shared/types'
 
 // One registry for every tool R-Code gives its agents. Claude and Codex reach it as an
 // HTTP MCP server; the built-in Pi agent through its R-Code extension.
@@ -24,7 +24,7 @@ export interface ToolDef {
   /** Hidden from delegated sub-agent threads. */
   topLevelOnly?: boolean
   /** Settings flag that must be on. */
-  enabledBy?: 'enableDelegation'
+  enabledBy?: 'enableDelegation' | 'enableComputerControl'
   run(ctx: ToolContext, args: any): Promise<ToolResult>
 }
 
@@ -34,7 +34,7 @@ export function registerTools(defs: ToolDef[]): void {
   for (const d of defs) tools.set(d.name, d)
 }
 
-export function toolsFor(agent: AgentId, opts: { isChild: boolean; settings: { enableDelegation: boolean } }): ToolDef[] {
+export function toolsFor(agent: AgentId, opts: { isChild: boolean; settings: Pick<Settings, 'enableDelegation' | 'enableComputerControl'> }): ToolDef[] {
   return [...tools.values()].filter(
     (t) => (!t.agents || t.agents.includes(agent)) && !(t.topLevelOnly && opts.isChild) && !(t.enabledBy && !opts.settings[t.enabledBy])
   )

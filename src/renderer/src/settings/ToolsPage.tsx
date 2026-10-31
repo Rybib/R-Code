@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Check, Download, Globe, Search, Smartphone } from 'lucide-react'
+import { Check, Download, Globe, MousePointerClick, Search, Smartphone } from 'lucide-react'
 import { useStore } from '../store'
-import { Button, Card, Row, Select, Spinner, StatusDot, TextInput } from '../components/ui'
+import { Button, Card, Row, Select, Spinner, StatusDot, TextInput, Toggle } from '../components/ui'
 import { PageTitle } from './Settings'
 
 const r = (): any => (window as any).rcode
@@ -14,12 +14,37 @@ export function ToolsPage(): React.JSX.Element {
   const [hasAxe, setHasAxe] = useState<boolean | null>(null)
   const [installing, setInstalling] = useState(false)
   const [devices, setDevices] = useState<{ udid: string; name: string; runtime: string }[]>([])
+  const [computer, setComputer] = useState<{ available: boolean; accessibility: boolean; screenRecording: boolean } | null>(null)
 
   useEffect(() => {
     void r().invoke('ios:hasAxe').then(setHasAxe)
     void r().invoke('ios:xcodeVersion').then(setXcode)
     void r().invoke('ios:devices').then(setDevices)
+    // Re-check permissions when the user comes back from System Settings.
+    const check = (): void => void r().invoke('computer:status').then(setComputer)
+    check()
+    window.addEventListener('focus', check)
+    return () => window.removeEventListener('focus', check)
   }, [])
+
+  const permission = (label: string, hint: string, granted: boolean | undefined, pane: 'accessibility' | 'screen'): React.JSX.Element => (
+    <Row label={label} hint={hint}>
+      {granted ? (
+        <span className="flex items-center gap-1 text-[12.5px] text-ok">
+          <Check size={12} /> Allowed
+        </span>
+      ) : (
+        <span className="flex items-center gap-1.5">
+          <Button size="sm" variant="secondary" onClick={async () => setComputer(await r().invoke('computer:request'))}>
+            Ask macOS
+          </Button>
+          <Button size="sm" variant="primary" onClick={() => void r().invoke('computer:openSettings', pane)}>
+            Open System Settings
+          </Button>
+        </span>
+      )}
+    </Row>
+  )
 
   const key = (k: 'brave' | 'tavily' | 'ollama'): React.JSX.Element => (
     <TextInput
@@ -33,7 +58,7 @@ export function ToolsPage(): React.JSX.Element {
 
   return (
     <>
-      <PageTitle title="Browser, iOS & Web" subtitle="Tools R-Code gives every agent: a built-in browser, the iOS Simulator with Xcode, and web search for the built-in agent." />
+      <PageTitle title="Agent tools" subtitle="Tools R-Code gives every agent: a built-in browser, the iOS Simulator with Xcode, control of your computer, and web search for the built-in agent." />
       <Card
         title={
           <span className="flex items-center gap-2">
@@ -94,6 +119,32 @@ export function ToolsPage(): React.JSX.Element {
             onChange={(v) => void setSettings({ iosDevice: v || undefined })}
           />
         </Row>
+      </Card>
+      <Card
+        title={
+          <span className="flex items-center gap-2">
+            <MousePointerClick size={14} /> Computer control
+          </span>
+        }
+        subtitle="Agents can see your screen and use your mouse and keyboard to work in Mac apps, through one computer tool. Each chat asks before an agent takes control (except in Allow all), and agents can never click or type into R-Code itself."
+      >
+        <Row label="Let agents control this Mac" hint="Off by default. Applies to chats started, or agents switched to, after you turn it on. Delegated sub-agents never get it.">
+          <Toggle checked={s.enableComputerControl} disabled={computer?.available === false} onChange={(v) => void setSettings({ enableComputerControl: v })} />
+        </Row>
+        {computer === null ? (
+          <Row label="Permissions">
+            <Spinner size={12} />
+          </Row>
+        ) : !computer.available ? (
+          <p className="pb-2 text-[12.5px] text-warn">This build is missing the computer-control helper. Building R-Code from source needs Xcode or its Command Line Tools.</p>
+        ) : (
+          s.enableComputerControl && (
+            <>
+              {permission('Accessibility', 'Lets R-Code use the mouse and keyboard.', computer.accessibility, 'accessibility')}
+              {permission('Screen Recording', 'Lets R-Code see the screen. macOS may ask you to reopen R-Code after allowing it.', computer.screenRecording, 'screen')}
+            </>
+          )
+        )}
       </Card>
       <Card
         title={

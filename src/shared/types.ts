@@ -45,7 +45,7 @@ export const PERMISSION_LABELS: Record<PermissionMode, string> = {
   plan: 'Plan only'
 }
 
-export type ToolKind = 'command' | 'edit' | 'read' | 'search' | 'web' | 'browser' | 'ios' | 'task' | 'mcp' | 'todo' | 'other'
+export type ToolKind = 'command' | 'edit' | 'read' | 'search' | 'web' | 'browser' | 'ios' | 'computer' | 'task' | 'mcp' | 'todo' | 'other'
 
 export interface ImageAttachment {
   name: string
@@ -235,6 +235,8 @@ export interface Settings {
   searxngUrl: string
   // iOS
   iosDevice?: string
+  // computer control (screen, mouse and keyboard) for agents
+  enableComputerControl: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -270,7 +272,8 @@ export const DEFAULT_SETTINGS: Settings = {
   codexSandbox: 'workspace-write',
   searchProvider: 'auto',
   searchKeys: {},
-  searxngUrl: ''
+  searxngUrl: '',
+  enableComputerControl: false
 }
 
 /** Events pushed from main to the renderer for a thread. */

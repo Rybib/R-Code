@@ -26,7 +26,8 @@ export interface TurnSink {
   setPlan(steps: PlanStep[]): void
   setUsage(usage: Partial<Usage>): void
   setSessionId(id: string): void
-  requestApproval(req: { title: string; detail?: string; parentId?: string }): Promise<ApprovalDecision>
+  /** `key` groups requests that "Always allow this chat" covers (default: same title and detail). */
+  requestApproval(req: { title: string; detail?: string; parentId?: string; key?: string }): Promise<ApprovalDecision>
   /** The agent finished the turn (successfully or not). */
   turnDone(result?: { error?: string }): void
   notice(text: string, tone?: 'info' | 'warn' | 'error' | 'success'): void

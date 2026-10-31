@@ -1,4 +1,5 @@
 import type { ToolKind } from './types'
+import { describeComputerAction } from './computer-action'
 
 /** Friendly titles for R-Code's own agent tools (browser, iOS, delegation, web). */
 export function describeRcodeTool(name: string, args: any): { kind: ToolKind; title: string; detail?: string } | null {
@@ -38,6 +39,8 @@ export function describeRcodeTool(name: string, args: any): { kind: ToolKind; ti
       return { kind: 'ios', title: `Open ${a.url} in the Simulator` }
     case 'ios_app_logs':
       return { kind: 'ios', title: 'Read Simulator logs' }
+    case 'computer':
+      return { kind: 'computer', title: describeComputerAction(a), detail: a.action === 'type' ? a.text : undefined }
     case 'search_web':
     case 'web_search':
       return { kind: 'web', title: `Search the web for "${a.query ?? ''}"` }

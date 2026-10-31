@@ -247,7 +247,7 @@ export class Orchestrator {
         self.touch(t)
       },
       async requestApproval(req) {
-        const key = `${req.title}\n${req.detail ?? ''}`
+        const key = req.key ?? `${req.title}\n${req.detail ?? ''}`
         if (self.sessionAllow.get(t.id)?.has(key)) return 'approveSession'
         const requestId = uid('apr')
         const item: TimelineItem = { kind: 'approval', id: requestId, requestId, ts: Date.now(), title: req.title, detail: req.detail, status: 'pending', parentId: req.parentId }
@@ -576,6 +576,16 @@ export class Orchestrator {
 
   threadInfo(id: string): { isChild: boolean } {
     return { isChild: !!this.threads.get(id)?.parentThreadId }
+  }
+
+  /** Ask the user in a chat's timeline on behalf of one of R-Code's own tools. */
+  askUser(threadId: string, agent: AgentId, req: { title: string; detail?: string; key?: string }): Promise<ApprovalDecision> {
+    const t = this.threads.get(threadId)
+    return t ? this.makeSink(t, agent).requestApproval(req) : Promise.resolve('deny')
+  }
+
+  permissionModeFor(threadId: string): PermissionMode {
+    return this.threads.get(threadId)?.permissionMode ?? getSettings().defaultPermissionMode
   }
 
   cwdFor(id: string): string {

@@ -1,5 +1,5 @@
-// electron-builder afterPack hook: copies the bundled AXe CLI (see fetch-axe.mjs) into the app's
-// Resources before signing. ditto keeps the frameworks' symlinks and empty folders intact,
+// electron-builder afterPack hook: copies the bundled AXe CLI (see fetch-axe.mjs) and the
+// computer-control helper (see build-computer-helper.mjs) into the app's Resources before signing. ditto keeps the frameworks' symlinks and empty folders intact,
 // which electron-builder's own resource copy does not.
 const { execFileSync } = require('node:child_process')
 const { existsSync, rmSync } = require('node:fs')
@@ -14,4 +14,8 @@ exports.default = async function afterPack(context) {
   rmSync(dest, { recursive: true, force: true })
   execFileSync('ditto', [src, dest])
   rmSync(join(dest, '.version'), { force: true })
+
+  const helper = join(context.packager.projectDir, 'vendor', 'rcode-computer', 'rcode-computer')
+  if (!existsSync(helper)) throw new Error('vendor/rcode-computer is missing; run `npm run build:computer` first')
+  execFileSync('ditto', [helper, join(app, 'Contents', 'Resources', 'rcode-computer')])
 }

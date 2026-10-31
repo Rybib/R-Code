@@ -9,13 +9,14 @@
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "node scripts/build-computer-helper.mjs --optional && electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "dist": "node scripts/fetch-axe.mjs && electron-vite build && electron-builder --mac",
-    "dist:dmg": "node scripts/fetch-axe.mjs && electron-vite build && electron-builder --mac dmg",
-    "fetch:axe": "node scripts/fetch-axe.mjs"
+    "dist": "node scripts/fetch-axe.mjs && node scripts/build-computer-helper.mjs && electron-vite build && electron-builder --mac",
+    "dist:dmg": "node scripts/fetch-axe.mjs && node scripts/build-computer-helper.mjs && electron-vite build && electron-builder --mac dmg",
+    "fetch:axe": "node scripts/fetch-axe.mjs",
+    "build:computer": "node scripts/build-computer-helper.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.314",
@@ -78,6 +79,7 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "R-Code uses the microphone for on-device Whisper dictation.",
         "NSAppleEventsUsageDescription": "R-Code and its coding agents use Apple Events to open Terminal for sign-in and to control apps you ask them to.",
+        "NSScreenCaptureUsageDescription": "When you turn on computer control, your coding agents see the screen to work in Mac apps for you.",
         "NSDesktopFolderUsageDescription": "Your coding agents read and change files in Desktop when you work there.",
         "NSDocumentsFolderUsageDescription": "Your coding agents read and change files in Documents when you work there.",
         "NSDownloadsFolderUsageDescription": "Your coding agents read and change files in Downloads when you ask them to.",

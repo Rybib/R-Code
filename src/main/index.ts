@@ -24,6 +24,7 @@ import { clearPiModelCache } from './agents/pi'
 import { startDevAutomation } from './dev-automation'
 import { getUsage, refreshUsageSoon, startUsage } from './usage'
 import { registerTools } from './tools/registry'
+import { computerStatus, computerTools, openPrivacySettings, requestComputerAccess } from './tools/computer'
 import { BrowserController, browserTools } from './tools/browser'
 import { webTools } from './tools/web'
 import { axePath, bootDevice, buildAndRun, installAxe, iosTools, listDevices, pressHome, screenshot as simScreenshot, shutdownDevice, tap as simTap } from './tools/ios'
@@ -324,6 +325,10 @@ function registerIpc(): void {
   handle('ios:buildRun', (cwd: string, udid?: string) => buildAndRun({ cwd, device: udid }, (line) => send('ios-log', line)))
   handle('ios:openSimulatorApp', () => run('/usr/bin/open', ['-a', 'Simulator']))
 
+  handle('computer:status', () => computerStatus())
+  handle('computer:request', () => requestComputerAccess())
+  handle('computer:openSettings', (pane: 'accessibility' | 'screen') => openPrivacySettings(pane))
+
   handle('pi:keys', () => getPiKeys())
   handle('pi:setKey', (provider: string, key: string | null) => {
     setPiKey(provider, key)
@@ -379,7 +384,8 @@ app.whenReady().then(async () => {
       ...orchestrator.tools(),
       ...browserTools(browser, send),
       ...webTools(getSettings, browser),
-      ...iosTools(send, (id) => orchestrator.cwdFor(id))
+      ...iosTools(send, (id) => orchestrator.cwdFor(id)),
+      ...computerTools({ ask: (id, agent, req) => orchestrator.askUser(id, agent, req), modeFor: (id) => orchestrator.permissionModeFor(id) })
     ])
   )
   await step('bridge', async () => {

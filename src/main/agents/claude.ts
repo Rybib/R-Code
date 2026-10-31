@@ -97,6 +97,8 @@ export function classifyClaudeTool(name: string, input: any, cwd: string): { kin
     case 'TaskList':
     case 'TaskGet':
       return { kind: 'todo', title: 'Check tasks' }
+    case 'ToolSearch':
+      return { kind: 'search', title: 'Load tools', detail: input?.query }
     case 'ExitPlanMode':
       return { kind: 'other', title: 'Plan ready', detail: input?.plan }
     default:

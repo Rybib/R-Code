@@ -25,7 +25,8 @@ import {
   CheckCircle2,
   ExternalLink,
   Scissors,
-  Smartphone
+  Smartphone,
+  MousePointerClick
 } from 'lucide-react'
 import { AGENT_LABELS, type TimelineItem, type ToolKind } from '@shared/types'
 import { Markdown } from './Markdown'
@@ -342,6 +343,7 @@ const KIND_ICON: Record<ToolKind, React.ComponentType<{ size?: number; className
   task: Users,
   browser: Globe,
   ios: Smartphone,
+  computer: MousePointerClick,
   mcp: Plug,
   todo: ListTodo,
   other: Wrench

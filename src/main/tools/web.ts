@@ -111,7 +111,7 @@ export function webTools(getSettings: () => Settings, browser: BrowserController
         if (!hits.length) return { text: `No results found for "${query}".`, isError: true }
         return {
           text:
-            `Results for "${query}" (searched in the background browser; add a Brave/Tavily/Ollama key in Settings → Browser, iOS & Web for faster results):\n\n` +
+            `Results for "${query}" (searched in the background browser; add a Brave/Tavily/Ollama key in Settings → Agent tools for faster results):\n\n` +
             hits.slice(0, count).map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}\n   ${h.snippet}`).join('\n\n')
         }
       }
