@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, systemPreferences } from 'electron'
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { AGENT_IDS, type AgentId, type InstallLogEvent, type NewThreadOptions, type Project, type SendOptions, type Settings, type ThreadEvent } from '@shared/types'
 import { loadShellEnv, run, which } from './env'
@@ -27,6 +27,7 @@ import { registerTools } from './tools/registry'
 import { computerStatus, computerTools, openPrivacySettings, requestComputerAccess } from './tools/computer'
 import { BrowserController, browserTools } from './tools/browser'
 import { webTools } from './tools/web'
+import { TerminalManager, terminalTools } from './tools/terminal'
 import { axePath, bootDevice, buildAndRun, installAxe, iosTools, listDevices, pressHome, screenshot as simScreenshot, shutdownDevice, tap as simTap } from './tools/ios'
 
 app.setName('R-Code')
@@ -49,6 +50,7 @@ process.on('unhandledRejection', (err) => console.error('[main] unhandled reject
 let win: BrowserWindow | null = null
 let orchestrator: Orchestrator
 let browser: BrowserController
+let terminals: TerminalManager
 
 function send(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
@@ -197,6 +199,12 @@ function registerIpc(): void {
     if (refresh && agent === 'pi') clearPiModelCache()
     return adapters[agent].listModels(getSettings()).catch(() => [])
   })
+  handle('agents:commands', async (agent: AgentId, cwd?: string) => {
+    const adapter = adapters[agent]
+    if (!adapter?.listCommands) return []
+    const dir = cwd && existsSync(cwd) ? cwd : app.getPath('home')
+    return adapter.listCommands(getSettings(), dir).catch(() => [])
+  })
   handle('agents:install', async (agent: AgentId) => {
     const ok = await installAgent(agent, installLog)
     if (ok) await loadShellEnvFresh()
@@ -276,6 +284,21 @@ function registerIpc(): void {
   handle('browser:reload', () => browser.reload())
   handle('browser:state', () => browser.state())
   handle('browser:devtools', () => browser.view?.webContents.openDevTools({ mode: 'detach' }))
+
+  // Terminal panel
+  handle('terminal:list', () => terminals.list())
+  handle('terminal:create', (opts: { cwd?: string; cols?: number; rows?: number }) => {
+    try {
+      return { ok: true, info: terminals.create({ cwd: opts?.cwd, cols: opts?.cols, rows: opts?.rows, kind: 'shell' }) }
+    } catch (err: any) {
+      return { ok: false, error: String(err?.message ?? err) }
+    }
+  })
+  handle('terminal:history', (id: string) => terminals.history(id))
+  handle('terminal:write', (id: string, data: string) => terminals.write(id, data))
+  handle('terminal:resize', (id: string, cols: number, rows: number) => terminals.resize(id, cols, rows))
+  handle('terminal:kill', (id: string) => terminals.kill(id))
+  handle('terminal:close', (id: string) => terminals.close(id))
 
   // iOS Simulator panel
   // Site icon for hosts without /favicon.ico: read the <link rel="icon"> from the site's homepage.
@@ -379,12 +402,18 @@ app.whenReady().then(async () => {
 
   orchestrator = new Orchestrator((ev: ThreadEvent) => send('thread-event', ev))
   browser = new BrowserController(() => win, send)
+  terminals = new TerminalManager(send)
   await step('tools', () =>
     registerTools([
       ...orchestrator.tools(),
       ...browserTools(browser, send),
       ...webTools(getSettings, browser),
       ...iosTools(send, (id) => orchestrator.cwdFor(id)),
+      ...terminalTools(terminals, send, {
+        cwdFor: (id) => orchestrator.cwdFor(id),
+        ask: (id, agent, req) => orchestrator.askUser(id, agent, req),
+        modeFor: (id) => orchestrator.permissionModeFor(id)
+      }),
       ...computerTools({ ask: (id, agent, req) => orchestrator.askUser(id, agent, req), modeFor: (id) => orchestrator.permissionModeFor(id) })
     ])
   )
@@ -413,6 +442,7 @@ app.on('before-quit', () => {
   try {
     flushAll((orchestrator as any)?.threads?.values?.() ?? [])
     orchestrator?.disposeAll()
+    terminals?.disposeAll()
   } catch {
     /* ignore */
   }

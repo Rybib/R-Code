@@ -13,14 +13,16 @@ import {
   X,
   ExternalLink,
   Download,
-  Terminal
+  Terminal,
+  SquareTerminal
 } from 'lucide-react'
 import { useStore } from '../store'
 import { Button, IconButton, Spinner } from './ui'
+import { TerminalPanel } from './TerminalPanel'
 
 const r = (): any => (window as any).rcode
 
-export type PanelKind = 'browser' | 'simulator'
+export type PanelKind = 'browser' | 'simulator' | 'terminal'
 
 export function SidePanel(): React.JSX.Element | null {
   const panel = useStore((s) => s.panel)
@@ -59,12 +61,13 @@ export function SidePanel(): React.JSX.Element | null {
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-line-soft px-2">
         <PanelTab icon={<Globe size={13} />} label="Browser" active={panel === 'browser'} onClick={() => set({ panel: 'browser' })} />
         <PanelTab icon={<Smartphone size={13} />} label="Simulator" active={panel === 'simulator'} onClick={() => set({ panel: 'simulator' })} />
+        <PanelTab icon={<SquareTerminal size={13} />} label="Terminal" active={panel === 'terminal'} onClick={() => set({ panel: 'terminal' })} />
         <div className="flex-1" />
         <IconButton title="Close panel" onClick={() => set({ panel: null })}>
           <X size={14} />
         </IconButton>
       </div>
-      <div className="min-h-0 flex-1">{panel === 'browser' ? <BrowserPanel /> : <SimulatorPanel />}</div>
+      <div className="min-h-0 flex-1">{panel === 'browser' ? <BrowserPanel /> : panel === 'simulator' ? <SimulatorPanel /> : <TerminalPanel />}</div>
     </div>
   )
 }

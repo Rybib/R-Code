@@ -9,6 +9,7 @@ import type {
   Project,
   SendOptions,
   Settings,
+  SlashCommand,
   Thread,
   ThreadEvent,
   ThreadSummary
@@ -34,6 +35,7 @@ export const api = {
   updateSettings: (patch: Partial<Settings>) => r().invoke<Settings>('settings:update', patch),
 
   detectAgents: () => r().invoke<AgentStatus[]>('agents:detect'),
+  commands: (agent: AgentId, cwd?: string) => r().invoke<SlashCommand[]>('agents:commands', agent, cwd),
   models: (agent: AgentId, refresh = false) => r().invoke<ModelOption[]>('agents:models', agent, refresh),
   installAgent: (agent: AgentId) => r().invoke<boolean>('agents:install', agent),
   loginAgent: (agent: AgentId) => r().invoke<void>('agents:login', agent),

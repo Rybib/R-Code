@@ -55,8 +55,10 @@ interface State {
   composerImages: Record<string, ImageAttachment[]>
   /** Agent/model the user picked in an existing thread's composer (applied on next send). */
   threadSel: Record<string, Partial<Draft>>
-  panel: 'browser' | 'simulator' | null
+  panel: 'browser' | 'simulator' | 'terminal' | null
   panelWidth: number
+  /** Terminal tab shown in the terminal panel. */
+  activeTerminal: string | null
   /** True while any popover is open (the native browser view would cover it). */
   popoverOpen: boolean
 
@@ -142,6 +144,7 @@ export const useStore = create<State>((set, get) => ({
   threadSel: {},
   panel: null,
   panelWidth: 460,
+  activeTerminal: null,
   popoverOpen: false,
 
   set: (patch) => set(patch),
@@ -347,7 +350,8 @@ export const useStore = create<State>((set, get) => ({
 // Install-log streaming is global so any page can show progress.
 export function wireGlobalEvents(): () => void {
   const offThread = api.onThreadEvent((ev) => useStore.getState().applyEvent(ev))
-  const offPanel = window.rcode.on('panel-open', (panel: 'browser' | 'simulator') => useStore.setState({ panel }))
+  const offPanel = window.rcode.on('panel-open', (panel: 'browser' | 'simulator' | 'terminal') => useStore.setState({ panel }))
+  const offTermFocus = window.rcode.on('terminal-focus', (id: string) => useStore.setState({ activeTerminal: id }))
   const offUsage = window.rcode.on('usage', (u: { agent: AgentId; usage: PlanUsage | null }) =>
     useStore.setState((s) => ({ planUsage: { ...s.planUsage, [u.agent]: u.usage } }))
   )
@@ -361,6 +365,7 @@ export function wireGlobalEvents(): () => void {
     offThread()
     offInstall()
     offPanel()
+    offTermFocus()
     offUsage()
   }
 }

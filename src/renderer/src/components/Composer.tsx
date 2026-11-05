@@ -8,6 +8,8 @@ import { ModelPicker, PermissionPicker, type Selection } from './ModelPicker'
 import { EffortControl } from './EffortSlider'
 import { VoiceWave } from './VoiceWave'
 import { cancelRecording, startRecording, stopRecordingAndTranscribe, useVoice } from '../voice/voice'
+import { SlashMenu, filterCommands, slashQuery, useSlashCommands } from './SlashMenu'
+import type { SlashCommand } from '@shared/types'
 
 const NO_IMAGES: ImageAttachment[] = []
 
@@ -39,6 +41,23 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null)
   const [dragging, setDragging] = useState(false)
   const [voiceError, setVoiceError] = useState<string | null>(null)
+  const cwd = useStore((s) => (threadKey in s.threads ? s.threads[threadKey]?.projectPath : s.draft.projectPath))
+
+  // "/" menu: the selected agent's own slash commands.
+  const query = slashQuery(text)
+  const [menuIndex, setMenuIndex] = useState(0)
+  const [menuDismissed, setMenuDismissed] = useState<string | null>(null)
+  const menuWanted = query !== null && menuDismissed !== text && !recording && !transcribing
+  const { commands, loading } = useSlashCommands(selection.agent, cwd, query !== null)
+  const matches = menuWanted ? filterCommands(commands, query!) : []
+  const menuOpen = menuWanted && (matches.length > 0 || loading || query!.length > 0)
+  useEffect(() => setMenuIndex(0), [query, selection.agent])
+  // The built-in browser is a native view drawn over the page; hide it while the menu is up.
+  useEffect(() => {
+    if (!menuOpen) return
+    useStore.setState({ popoverOpen: true })
+    return () => useStore.setState({ popoverOpen: false })
+  }, [menuOpen])
 
   const setText = (v: string): void => useStore.setState((s) => ({ composerText: { ...s.composerText, [threadKey]: v } }))
   const setImages = (v: ImageAttachment[]): void => useStore.setState((s) => ({ composerImages: { ...s.composerImages, [threadKey]: v } }))
@@ -62,7 +81,35 @@ export function Composer({
     await sendMessage(value || 'Take a look at the attached image.', images.length ? images : undefined)
   }
 
+  /** Tab completes a command; Enter runs it straight away unless it needs arguments. */
+  const pickCommand = (c: SlashCommand, run: boolean): void => {
+    const argsOptional = !c.argumentHint || /^\[|optional/i.test(c.argumentHint)
+    if (run && argsOptional) {
+      void submit(`/${c.name}`)
+      return
+    }
+    setText(`/${c.name} `)
+    ref.current?.focus()
+  }
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (menuOpen && !e.nativeEvent.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (matches.length) setMenuIndex((i) => (i + (e.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length)
+        return
+      }
+      if ((e.key === 'Tab' || e.key === 'Enter') && matches[menuIndex] && !e.shiftKey) {
+        e.preventDefault()
+        pickCommand(matches[menuIndex], e.key === 'Enter')
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMenuDismissed(text)
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
       const send = settings.sendWithEnter ? !e.shiftKey : e.metaKey
       if (send) {
@@ -156,6 +203,7 @@ export function Composer({
         dragging ? 'border-accent shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_25%,transparent)]' : 'border-field-border focus-within:border-fg-4/60'
       )}
     >
+      {menuOpen && <SlashMenu agent={selection.agent} items={matches} loading={loading} index={menuIndex} onHover={setMenuIndex} onPick={(c) => pickCommand(c, true)} />}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2 px-3 pt-3">
           {images.map((img, i) => (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Download, Globe, MousePointerClick, Search, Smartphone } from 'lucide-react'
+import { Check, Download, Globe, MousePointerClick, Search, Smartphone, SquareTerminal } from 'lucide-react'
 import { useStore } from '../store'
 import { Button, Card, Row, Select, Spinner, StatusDot, TextInput, Toggle } from '../components/ui'
 import { PageTitle } from './Settings'
@@ -58,7 +58,7 @@ export function ToolsPage(): React.JSX.Element {
 
   return (
     <>
-      <PageTitle title="Agent tools" subtitle="Tools R-Code gives every agent: a built-in browser, the iOS Simulator with Xcode, control of your computer, and web search for the built-in agent." />
+      <PageTitle title="Agent tools" subtitle="Tools R-Code gives every agent: a built-in browser, the iOS Simulator with Xcode, a terminal, control of your computer, and web search for the built-in agent." />
       <Card
         title={
           <span className="flex items-center gap-2">
@@ -73,6 +73,21 @@ export function ToolsPage(): React.JSX.Element {
         }
       >
         <p className="pb-1 text-[12.5px] text-fg-3">Cookies and logins live in a separate R-Code browser profile, apart from your other browsers.</p>
+      </Card>
+      <Card
+        title={
+          <span className="flex items-center gap-2">
+            <SquareTerminal size={14} /> Terminal
+          </span>
+        }
+        subtitle="Agents use terminal_run, terminal_read, terminal_write, terminal_kill and terminal_list. Commands they start (dev servers, watchers, builds) get their own tab that you can watch and stop."
+        actions={
+          <Button size="sm" variant="secondary" onClick={() => set({ view: 'chat', panel: 'terminal' })}>
+            Open terminal
+          </Button>
+        }
+      >
+        <p className="pb-1 text-[12.5px] text-fg-3">Commands follow the chat's permission mode: Plan never runs them, Ask first and Accept edits ask before each one, Auto and Allow all run them.</p>
       </Card>
       <Card
         title={

@@ -39,6 +39,16 @@ export function describeRcodeTool(name: string, args: any): { kind: ToolKind; ti
       return { kind: 'ios', title: `Open ${a.url} in the Simulator` }
     case 'ios_app_logs':
       return { kind: 'ios', title: 'Read Simulator logs' }
+    case 'terminal_run':
+      return { kind: 'command', title: a.title ? `Run ${a.title} in the terminal` : 'Run in the terminal', detail: a.command }
+    case 'terminal_read':
+      return { kind: 'command', title: `Read terminal ${a.id ?? ''}`.trim() }
+    case 'terminal_write':
+      return { kind: 'command', title: `Type into terminal ${a.id ?? ''}`.trim(), detail: a.text }
+    case 'terminal_kill':
+      return { kind: 'command', title: `Stop terminal ${a.id ?? ''}`.trim() }
+    case 'terminal_list':
+      return { kind: 'command', title: 'List terminals' }
     case 'computer':
       return { kind: 'computer', title: describeComputerAction(a), detail: a.action === 'type' ? a.text : undefined }
     case 'search_web':

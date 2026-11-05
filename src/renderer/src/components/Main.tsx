@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { Globe, Smartphone, ChevronDown, CircleCheck, Circle, FolderOpen, PanelLeft, Plus, X, Loader, Sparkles, FolderPlus, Home, ChevronUp } from 'lucide-react'
+import { Globe, Smartphone, SquareTerminal, ChevronDown, CircleCheck, Circle, FolderOpen, PanelLeft, Plus, X, Loader, Sparkles, FolderPlus, Home, ChevronUp } from 'lucide-react'
 import type { PermissionMode } from '@shared/types'
 import { useStore, defaultModelFor } from '../store'
 import { api } from '../lib/api'
@@ -86,6 +86,9 @@ export function TabBar(): React.JSX.Element {
           </IconButton>
           <IconButton title="iOS Simulator" active={panel === 'simulator'} onClick={() => set({ panel: panel === 'simulator' ? null : 'simulator' })}>
             <Smartphone size={15} />
+          </IconButton>
+          <IconButton title="Terminal" active={panel === 'terminal'} onClick={() => set({ panel: panel === 'terminal' ? null : 'terminal' })}>
+            <SquareTerminal size={15} />
           </IconButton>
         </div>
       )}
@@ -177,7 +180,7 @@ export function ChatView({ threadId }: { threadId: string }): React.JSX.Element 
   useLayoutEffect(() => {
     const el = scroller.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [items])
+  }, [items, thread?.plan])
 
   useEffect(() => {
     stick.current = true
@@ -206,10 +209,11 @@ export function ChatView({ threadId }: { threadId: string }): React.JSX.Element 
       >
         <div className="mx-auto w-full max-w-[760px] px-6 pt-6">
           {items ? <Timeline threadId={threadId} items={items} running={!!thread.running} /> : null}
+          {/* The task checklist is part of the conversation: it sits after the latest message and scrolls with the chat. */}
+          {thread.plan && thread.plan.length > 0 && <PlanCard threadId={threadId} />}
         </div>
       </div>
       <div className="mx-auto w-full max-w-[760px] px-6 pb-5">
-        {thread.plan && thread.plan.length > 0 && <PlanCard threadId={threadId} />}
         <div className="mb-2 flex items-center gap-2">
           <ProjectSwitcher threadId={threadId} variant="pill" branch={branch} />
           <div className="flex-1" />
@@ -237,7 +241,7 @@ function PlanCard({ threadId }: { threadId: string }): React.JSX.Element {
   const done = plan.filter((p) => p.status === 'completed').length
   const current = plan.find((p) => p.status === 'in_progress')
   return (
-    <div className="fade-up mb-2 overflow-hidden rounded-xl border border-line-soft bg-raised/60">
+    <div className="fade-up mb-6 overflow-hidden rounded-xl border border-line-soft bg-raised/60">
       <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] text-fg-2">
         {open ? <ChevronDown size={13} className="text-fg-3" /> : <ChevronUp size={13} className="text-fg-3" />}
         <CircleCheck size={13} className={done === plan.length ? 'text-ok' : 'text-fg-3'} />
@@ -251,7 +255,7 @@ function PlanCard({ threadId }: { threadId: string }): React.JSX.Element {
         )}
       </button>
       {open && (
-        <div className="max-h-44 overflow-y-auto px-3 pb-2">
+        <div className="px-3 pb-2">
           {plan.map((p, i) => (
             <div key={i} className="flex items-start gap-2 py-[3px] text-[12.5px]">
               {p.status === 'completed' ? (

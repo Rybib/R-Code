@@ -2,12 +2,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
-import type { AgentStatus, ModelOption, PermissionMode, Settings, ToolKind } from '@shared/types'
+import { parseSlashCommand, type AgentStatus, type ModelOption, type PermissionMode, type Settings, type SlashCommand, type ToolKind } from '@shared/types'
 import { jsonLines, nodeBinary } from '../env'
 import { dataPath } from '../store'
 import { piToolsJson } from '../bridge'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
-import { shortPath, truncate, uid } from './base'
+import { commandCache, shortPath, truncate, uid } from './base'
 import { currentContents, unifiedDiff } from './diff'
 import { describeRcodeTool } from '@shared/rcode-tools'
 
@@ -164,6 +164,8 @@ class PiSession implements AgentSession {
   private currentModel: string | undefined
   private currentThinking: string | undefined
   private running = false
+  /** Pi began an agent run for the current prompt (an extension command may not start one). */
+  private agentStarted = false
   private msgBlocks = new Map<number, string>() // contentIndex -> item id for the current assistant message
   private thinkingStarted = new Map<string, number>()
   private modeFile: string
@@ -244,6 +246,9 @@ class PiSession implements AgentSession {
   private onEvent(ev: any): void {
     const sink = this.init.sink
     switch (ev.type) {
+      case 'agent_start':
+        this.agentStarted = true
+        break
       case 'message_start':
         if (ev.message?.role === 'assistant') this.msgBlocks.clear()
         break
@@ -387,10 +392,36 @@ class PiSession implements AgentSession {
       await rpc.request({ type: 'set_thinking_level', level: thinking }).catch(() => {})
       this.currentThinking = thinking
     }
-    const text = input.permissionMode === 'plan' ? `${input.text}\n\n(Plan only: investigate and propose a plan; do not modify files.)` : input.text
+    const cmd = input.images?.length ? null : parseSlashCommand(input.text)
+    if (cmd?.name === 'compact') {
+      // Pi's /compact is a TUI command; over RPC it's the compact request.
+      this.running = true
+      try {
+        await rpc.request({ type: 'compact', ...(cmd.args ? { customInstructions: cmd.args } : {}) }, 300000)
+        void this.refreshStats()
+      } finally {
+        if (this.running) {
+          this.running = false
+          this.init.sink.turnDone()
+        }
+      }
+      return
+    }
+    // Slash commands (extension commands, prompt templates, /skill:name) go through as typed; Pi expands them.
+    const text = input.permissionMode === 'plan' && !cmd ? `${input.text}\n\n(Plan only: investigate and propose a plan; do not modify files.)` : input.text
     const images = (input.images ?? []).map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType }))
     this.running = true
-    await rpc.request({ type: 'prompt', message: text, ...(images.length ? { images } : {}) })
+    this.agentStarted = false
+    const res = await rpc.request({ type: 'prompt', message: text, ...(images.length ? { images } : {}) })
+    // An extension command that handled itself starts no agent run, so nothing else would end the turn.
+    if (res?.disposition === 'handled') {
+      setTimeout(() => {
+        if (this.running && !this.agentStarted) {
+          this.running = false
+          this.init.sink.turnDone()
+        }
+      }, 1500)
+    }
   }
 
   async steer(text: string): Promise<boolean> {
@@ -460,7 +491,28 @@ export const piAdapter: AgentAdapter = {
     }
   },
 
+  listCommands(_settings, cwd): Promise<SlashCommand[]> {
+    return piCommands(cwd, async () => {
+      // The user's extensions, prompt templates and skills, as Pi would load them in this folder.
+      const rpc = new PiRpc(['--no-session', '--offline'], cwd)
+      try {
+        const data = await rpc.request({ type: 'get_commands' }, 20000)
+        const out: SlashCommand[] = [{ name: 'compact', description: 'Summarize the conversation to free up context', argumentHint: '[instructions]', source: 'built-in' }]
+        for (const c of data?.commands ?? []) {
+          const name = String(c?.name ?? '')
+          if (!name || name === 'compact') continue
+          out.push({ name, description: c.description || undefined, source: c.source === 'skill' ? 'skill' : c.source === 'prompt' ? 'prompt' : c.source === 'extension' ? 'extension' : undefined })
+        }
+        return out
+      } finally {
+        rpc.kill()
+      }
+    })
+  },
+
   createSession(init: SessionInit): AgentSession {
     return new PiSession(init)
   }
 }
+
+const piCommands = commandCache()

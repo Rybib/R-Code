@@ -34,6 +34,23 @@ export interface ModelOption {
   local?: boolean
 }
 
+/** A slash command an agent's own harness offers (Claude Code commands and skills, Codex skills, Pi templates). */
+export interface SlashCommand {
+  /** Without the leading slash. */
+  name: string
+  description?: string
+  /** e.g. "<file>" or "[instructions]" */
+  argumentHint?: string
+  /** Where it comes from, for the menu: 'built-in', 'skill', 'project', 'user', 'plugin'… */
+  source?: string
+}
+
+/** Text that is a slash command: "/name" or "/name arguments". */
+export function parseSlashCommand(text: string): { name: string; args: string } | null {
+  const m = text.trim().match(/^\/([A-Za-z0-9][\w:.\-]*)(?:\s+([\s\S]*))?$/)
+  return m ? { name: m[1], args: (m[2] ?? '').trim() } : null
+}
+
 /** Unified permission modes; each adapter maps these onto its agent. */
 export type PermissionMode = 'ask' | 'acceptEdits' | 'auto' | 'allowAll' | 'plan'
 

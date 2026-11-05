@@ -68,14 +68,24 @@ export async function shutdownDevice(udid: string): Promise<void> {
   await run('xcrun', ['simctl', 'shutdown', udid], { timeoutMs: 60000 })
 }
 
+let shotSeq = 0
+
 export async function screenshot(udid: string, maxWidth = 900): Promise<{ data: string; width: number; height: number; scale: number }> {
-  const file = dataPath(`sim-${udid}.png`)
-  const r = await run('xcrun', ['simctl', 'io', udid, 'screenshot', '--type=png', file], { timeoutMs: 20000 })
-  if (r.code !== 0) throw new Error(r.stderr.trim() || 'screenshot failed')
+  // The panel's live view and agents' tools screenshot the same device concurrently, so each
+  // capture gets its own file (a shared one could be deleted mid-read by another capture).
+  const file = dataPath(`sim-${udid}-${process.pid}-${++shotSeq}.png`)
+  try {
+    const r = await run('xcrun', ['simctl', 'io', udid, 'screenshot', '--type=png', file], { timeoutMs: 20000 })
+    if (r.code !== 0) throw new Error(r.stderr.trim() || 'screenshot failed')
+  } catch (err) {
+    rmSync(file, { force: true })
+    throw err
+  }
   const img = nativeImage.createFromPath(file)
+  rmSync(file, { force: true })
+  if (img.isEmpty()) throw new Error('The simulator returned an empty screenshot (it may still be booting).')
   const size = img.getSize()
   const scaled = size.width > maxWidth ? img.resize({ width: maxWidth, quality: 'good' }) : img
-  rmSync(file, { force: true })
   // Landscape screenshots are wider than tall, so judge by the shorter side.
   return { data: scaled.toPNG().toString('base64'), width: size.width, height: size.height, scale: await screenScale(udid, Math.min(size.width, size.height)) }
 }
@@ -141,7 +151,24 @@ function findXcodeContainer(dir: string, depth = 2): { kind: 'workspace' | 'proj
   return undefined
 }
 
+// One xcodebuild per project at a time: two builds into the same DerivedData (the panel's Build &
+// Run and an agent's tool call, or two agents) corrupt each other's build database.
+const buildLocks = new Map<string, Promise<unknown>>()
+
 export async function buildAndRun(opts: { cwd: string; path?: string; scheme?: string; device?: string; configuration?: string }, log: (line: string) => void): Promise<ToolResult> {
+  const key = opts.path ? (opts.path.startsWith('/') ? opts.path : join(opts.cwd, opts.path)) : opts.cwd
+  const prev = buildLocks.get(key)
+  if (prev) log('Waiting for the build already running for this project…')
+  const next = (prev ?? Promise.resolve()).catch(() => {}).then(() => buildAndRunUnlocked(opts, log))
+  buildLocks.set(key, next)
+  try {
+    return await next
+  } finally {
+    if (buildLocks.get(key) === next) buildLocks.delete(key)
+  }
+}
+
+async function buildAndRunUnlocked(opts: { cwd: string; path?: string; scheme?: string; device?: string; configuration?: string }, log: (line: string) => void): Promise<ToolResult> {
   if (!which('xcodebuild')) return { text: 'Xcode command line tools are not available (xcodebuild not found).', isError: true }
   const root = opts.path ? (opts.path.startsWith('/') ? opts.path : join(opts.cwd, opts.path)) : opts.cwd
   const container = root.endsWith('.xcodeproj') ? { kind: 'project' as const, path: root } : root.endsWith('.xcworkspace') ? { kind: 'workspace' as const, path: root } : findXcodeContainer(root)

@@ -5,6 +5,7 @@ import type {
   ImageAttachment,
   ModelOption,
   PermissionMode,
+  SlashCommand,
   PlanStep,
   PlanUsage,
   Settings,
@@ -26,10 +27,17 @@ export interface TurnSink {
   setPlan(steps: PlanStep[]): void
   setUsage(usage: Partial<Usage>): void
   setSessionId(id: string): void
-  /** `key` groups requests that "Always allow this chat" covers (default: same title and detail). */
-  requestApproval(req: { title: string; detail?: string; parentId?: string; key?: string }): Promise<ApprovalDecision>
-  /** The agent finished the turn (successfully or not). */
-  turnDone(result?: { error?: string }): void
+  /**
+   * `key` groups requests that "Always allow this chat" covers (default: same title and detail).
+   * `signal` withdraws the request (the agent gave up on it, e.g. its turn was interrupted): it
+   * resolves as 'deny' and the card is closed.
+   */
+  requestApproval(req: { title: string; detail?: string; parentId?: string; key?: string; signal?: AbortSignal }): Promise<ApprovalDecision>
+  /**
+   * The agent finished the turn (successfully or not). `interrupted`: it stopped because the
+   * user asked it to, so it isn't an error even if the agent reports one.
+   */
+  turnDone(result?: { error?: string; interrupted?: boolean }): void
   notice(text: string, tone?: 'info' | 'warn' | 'error' | 'success'): void
 }
 
@@ -39,6 +47,29 @@ export interface TurnInput {
   model: string
   effort?: string
   permissionMode: PermissionMode
+  /**
+   * This message with the whole conversation before it prepended as a context block. An adapter
+   * that could not resume its native session (expired, deleted, moved) starts a fresh one and
+   * sends this instead of `text`, so the agent doesn't silently lose everything it knew.
+   */
+  recoveryContext?: () => string
+}
+
+/**
+ * Errors that mean the agent's saved session can't be resumed (it expired, was deleted, or
+ * belongs to another folder). Matched against Claude Code and Codex error text.
+ */
+export const STALE_SESSION_RE = /no conversation found|session(?: id)? .*not found|thread not found|no rollout found|rollout .*(?:not found|missing)|failed to (?:load|resume) (?:session|thread|rollout)|invalid (?:session|thread) id/i
+
+/** Resolve within `ms`, or fall back to `fallback` (never rejects). */
+export function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(fallback), ms)
+    p.then(
+      (v) => (clearTimeout(t), resolve(v)),
+      () => (clearTimeout(t), resolve(fallback))
+    )
+  })
 }
 
 export interface AgentSession {
@@ -83,6 +114,22 @@ export interface AgentAdapter {
   createSession(init: SessionInit): AgentSession
   /** Subscription rate-limit usage, or null when the agent isn't on a plan with limits. */
   planUsage?(): Promise<PlanUsage | null>
+  /** The slash commands this agent's harness offers in `cwd` (project commands depend on the folder). */
+  listCommands?(settings: Settings, cwd: string): Promise<SlashCommand[]>
+}
+
+/** A small per-folder cache for command lists (each lookup starts a process). */
+export function commandCache(ttlMs = 120_000): (cwd: string, load: () => Promise<SlashCommand[]>) => Promise<SlashCommand[]> {
+  const cache = new Map<string, { at: number; value: Promise<SlashCommand[]> }>()
+  return (cwd, load) => {
+    const hit = cache.get(cwd)
+    if (hit && Date.now() - hit.at < ttlMs) return hit.value
+    const value = load().catch(() => [])
+    cache.set(cwd, { at: Date.now(), value })
+    // Don't keep an empty answer (the agent may just not be signed in yet) for the full TTL.
+    void value.then((v) => !v.length && cache.get(cwd)?.value === value && cache.delete(cwd))
+    return value
+  }
 }
 
 /**

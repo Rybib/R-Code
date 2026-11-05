@@ -11,6 +11,7 @@ One calm, Poolside-style home for your coding agents on macOS.
   - Claude Code's and Codex's own sub-agents show nested in the timeline.
 - **Built-in browser.** A real Chromium panel that you and the agents share (`browser_open`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_eval`, `browser_console`). Point it at a local dev server.
 - **iOS Simulator + Xcode.** A live Simulator panel with Build & Run. Agents get `ios_build_and_run`, `ios_screenshot`, `ios_tap`, `ios_swipe`, `ios_type_text`, `ios_describe_ui`, `ios_open_url` and `ios_app_logs`. Tapping, typing and reading the UI use [AXe](https://github.com/cameroncooke/AXe), which ships inside R-Code (`npm run dist` fetches the pinned, checksum-verified release).
+- **Terminal.** A real terminal panel (node-pty + xterm.js) next to the browser and Simulator. Agents get `terminal_run`, `terminal_read`, `terminal_write`, `terminal_kill` and `terminal_list`; anything they start (dev servers, watchers, builds) gets its own tab you can watch and stop. Commands follow the chat's permission mode.
 - **Computer control (opt-in).** Turn it on in Settings → Agent tools and agents get one `computer` tool to see the screen and use the mouse and keyboard in Mac apps. Each chat asks before an agent takes control (unless the chat is on Allow all), plan mode can only look, and agents can never click or type into R-Code itself. A small native helper (`native/rcode-computer.swift`) is compiled with Xcode's Swift compiler when you build.
 - **Web for the built-in agent:** `search_web` / `fetch_url`. Searches use Brave, Tavily, Ollama or SearXNG when you add a key or URL. With none set, Pi searches in a hidden background browser. Web activity shows the favicons of the sites visited.
 - **On-device voice.**
@@ -45,11 +46,11 @@ src/main/            Electron main process
   agents/            claude.ts (Agent SDK) · codex.ts (app-server JSON-RPC) · pi.ts (built-in, RPC mode)
   orchestrator.ts    threads, cross-agent context, queueing/steering, delegation
   bridge.ts          loopback MCP/HTTP server exposing R-Code tools to all agents
-  tools/             browser.ts · ios.ts · computer.ts · web.ts · registry.ts
+  tools/             browser.ts · ios.ts · terminal.ts · computer.ts · web.ts · registry.ts
   installer.ts       CLI installs, sign-in, Ollama ↔ Pi config
 native/              rcode-computer.swift (mouse/keyboard helper for computer control)
 src/renderer/        React UI (Tailwind v4, zustand)
-  components/        Sidebar, Composer, Timeline, ModelPicker, SidePanel (browser + simulator)
+  components/        Sidebar, Composer, Timeline, ModelPicker, SidePanel (browser, simulator, terminal)
   settings/          Onboarding + Settings pages
   voice/             Whisper STT + Kokoro TTS web workers
 ```

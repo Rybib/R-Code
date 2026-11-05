@@ -154,11 +154,27 @@ export function jsonLines(stream: NodeJS.ReadableStream, onMessage: (msg: any) =
       buffer = buffer.slice(idx + 1)
       if (line.endsWith('\r')) line = line.slice(0, -1)
       if (!line.trim()) continue
-      try {
-        onMessage(JSON.parse(line))
-      } catch {
-        onBadLine?.(line)
-      }
+      parse(line)
     }
   })
+  // A final message without a trailing newline still counts.
+  stream.on('end', () => {
+    const rest = buffer.trim()
+    buffer = ''
+    if (rest) parse(rest)
+  })
+  function parse(line: string): void {
+    let msg: any
+    try {
+      msg = JSON.parse(line)
+    } catch {
+      onBadLine?.(line)
+      return
+    }
+    try {
+      onMessage(msg)
+    } catch (err) {
+      console.error('[jsonLines] message handler failed', err)
+    }
+  }
 }

@@ -34,11 +34,27 @@ const SNAPSHOT_JS = `(() => {
   return { title: document.title, url: location.href, elements: lines.join('\\n'), text };
 })()`
 
+/** executeJavaScript never settles if the page is hung or sitting on an alert(); don't let a tool call hang with it. */
+function runJs<T>(wc: Electron.WebContents, code: string, ms = 15000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`The page did not respond within ${Math.round(ms / 1000)}s (it may be busy or showing a dialog).`)), ms)
+    wc.executeJavaScript(code, true).then(
+      (v) => (clearTimeout(t), resolve(v as T)),
+      (e) => (clearTimeout(t), reject(e))
+    )
+  })
+}
+
 export class BrowserController {
   view: WebContentsView | null = null
   private bounds: Rectangle | null = null
-  private visible = false
+  /** The window the view is attached to (on macOS the window can close and reopen while the app lives on). */
+  private attachedTo: BrowserWindow | null = null
   private consoleLog: string[] = []
+
+  private get visible(): boolean {
+    return !!this.attachedTo && !this.attachedTo.isDestroyed()
+  }
 
   constructor(
     private getWin: () => BrowserWindow | null,
@@ -61,8 +77,13 @@ export class BrowserController {
       if (this.consoleLog.length > 200) this.consoleLog.shift()
     })
     wc.setWindowOpenHandler(({ url }) => {
-      void wc.loadURL(url)
+      void wc.loadURL(url).catch(() => {})
       return { action: 'deny' }
+    })
+    // A crashed page leaves a dead view; reload it rather than leaving agents and the user stuck.
+    wc.on('render-process-gone', (_e, details) => {
+      this.consoleLog.push(`[error] The page's renderer process ended (${details.reason}); reloading.`)
+      if (details.reason !== 'clean-exit') setTimeout(() => !wc.isDestroyed() && wc.reload(), 300)
     })
     this.view = view
     return view
@@ -86,14 +107,15 @@ export class BrowserController {
     if (!win) return
     this.bounds = bounds
     if (!bounds || bounds.width < 2) {
-      if (this.view && this.visible) win.contentView.removeChildView(this.view)
-      this.visible = false
+      if (this.view && this.visible) this.attachedTo!.contentView.removeChildView(this.view)
+      this.attachedTo = null
       return
     }
     const view = this.ensure()
-    if (!this.visible) {
+    if (this.attachedTo !== win) {
+      if (this.visible) this.attachedTo!.contentView.removeChildView(view)
       win.contentView.addChildView(view)
-      this.visible = true
+      this.attachedTo = win
     }
     view.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) })
   }
@@ -137,12 +159,12 @@ export class BrowserController {
   async snapshot(): Promise<{ title: string; url: string; elements: string; text: string }> {
     this.ensure()
     await this.waitIdle()
-    return this.view!.webContents.executeJavaScript(SNAPSHOT_JS, true)
+    return runJs(this.view!.webContents, SNAPSHOT_JS)
   }
 
   async eval(js: string): Promise<unknown> {
     this.ensure()
-    return this.view!.webContents.executeJavaScript(js, true)
+    return runJs(this.view!.webContents, js)
   }
 
   async screenshot(): Promise<string> {
@@ -186,7 +208,7 @@ export class BrowserController {
       })
     }
     if (settleMs) await new Promise((r) => setTimeout(r, settleMs))
-    return wc.executeJavaScript(script, true)
+    return runJs<T>(wc, script)
   }
 }
 

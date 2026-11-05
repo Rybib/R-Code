@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -10,10 +10,10 @@ import {
   type SDKMessage,
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
-import type { AgentStatus, ModelOption, PermissionMode, PlanStep, PlanUsage, Settings, ToolKind, UsageWindow } from '@shared/types'
+import { parseSlashCommand, type AgentStatus, type ModelOption, type PermissionMode, type PlanStep, type PlanUsage, type Settings, type SlashCommand, type ToolKind, type UsageWindow } from '@shared/types'
 import { run, which } from '../env'
 import type { AgentAdapter, AgentSession, SessionInit, TurnInput } from './base'
-import { shortPath, truncate, uid, usageBus } from './base'
+import { STALE_SESSION_RE, commandCache, shortPath, truncate, uid, usageBus, withTimeout } from './base'
 import { currentContents, unifiedDiff } from './diff'
 import { describeRcodeTool } from '@shared/rcode-tools'
 
@@ -47,6 +47,72 @@ function claudeExecutable(): string | undefined {
   }
   return undefined
 }
+
+/**
+ * The environment Claude Code runs with. Variables that mark a *parent* Claude Code session
+ * (set when R-Code itself was started from a Claude Code terminal) make the CLI think it's a
+ * nested child, and ELECTRON_RUN_AS_NODE would make every Electron app the agent launches
+ * start as plain Node and exit. Same scrub list as T3 Code.
+ */
+const INHERITED_CLAUDE_VARS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_HOST_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_DESKTOP_APP_VERSION',
+  'CLAUDE_CODE_SSE_PORT',
+  'CLAUDE_EFFORT',
+  'CLAUDE_PID',
+  'CLAUDE_AGENT_SDK_VERSION',
+  'ELECTRON_RUN_AS_NODE',
+  'ELECTRON_NO_ATTACH_CONSOLE'
+]
+
+export function claudeEnv(): Record<string, string> {
+  const env: Record<string, string> = { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
+  for (const k of INHERITED_CLAUDE_VARS) delete env[k]
+  env.CLAUDE_CODE_ENTRYPOINT = 'sdk-ts'
+  return env
+}
+
+/**
+ * Whether Claude Code still has a transcript for a session id. A session whose transcript is
+ * gone (cleaned up, or never got past metadata) can't be resumed: the CLI exits with "No
+ * conversation found". Checked up front, like T3 Code, so the first message after that
+ * doesn't fail. 'unknown' leaves the decision to the CLI.
+ */
+function claudeTranscriptState(id: string): 'present' | 'missing' | 'unknown' {
+  const base = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects')
+  let dirs: string[]
+  try {
+    dirs = readdirSync(base)
+  } catch {
+    return 'unknown'
+  }
+  if (!dirs.length) return 'unknown'
+  for (const d of dirs) {
+    const file = join(base, d, `${id}.jsonl`)
+    if (!existsSync(file)) continue
+    try {
+      return /"type"\s*:\s*"(?:user|assistant)"/.test(readFileSync(file, 'utf8')) ? 'present' : 'missing'
+    } catch {
+      return 'unknown'
+    }
+  }
+  return 'missing'
+}
+
+/** Diagnostic lines Claude Code mixes into result errors; not for the user. */
+const cleanErrors = (errors: unknown): string =>
+  (Array.isArray(errors) ? errors : [])
+    .map(String)
+    .filter((e) => e.trim() && !e.startsWith('[ede_diagnostic]'))
+    .join('\n')
 
 export function classifyClaudeTool(name: string, input: any, cwd: string): { kind: ToolKind; title: string; detail?: string; diff?: string; file?: string } {
   const p = (v: unknown): string => (typeof v === 'string' ? shortPath(v, cwd) : '')
@@ -172,6 +238,15 @@ class ClaudeSession implements AgentSession {
   private tracksAnswers = false
   private settleTimer: NodeJS.Timeout | null = null
   private tasks = new Map<string, PlanStep & { id: string }>()
+  /** The user pressed stop: whatever the CLI reports next ends the turn as interrupted. */
+  private interrupting = false
+  /** Last few KB of the CLI's stderr, to explain a crash. */
+  private stderrTail = ''
+  /** The last message sent and how, so a turn that hit a stale session can be replayed in a fresh one. */
+  private lastTurn: { input: TurnInput; content: any[] } | null = null
+  /** The saved session couldn't be resumed: the next message starts fresh and carries the whole chat. */
+  private needsRecovery = false
+  private recoveredOnce = false
 
   constructor(private init: SessionInit) {
     this.sessionId = init.resumeId
@@ -180,7 +255,9 @@ class ClaudeSession implements AgentSession {
 
   private start(input: TurnInput): void {
     const { init } = this
+    if (this.sessionId && claudeTranscriptState(this.sessionId) === 'missing') this.dropSession()
     this.input = new InputQueue()
+    this.stderrTail = ''
     this.currentModel = input.model
     this.currentEffort = input.effort
     this.currentMode = input.permissionMode
@@ -211,17 +288,27 @@ class ClaudeSession implements AgentSession {
         pathToClaudeCodeExecutable: claudeExecutable(),
         disallowedTools: ['AskUserQuestion'],
         mcpServers,
-        // Headless Claude Code leaves out the task list tools the interactive CLI has; turn them on.
-        env: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1', ...process.env, CLAUDE_CODE_ENTRYPOINT: 'sdk-ts' } as Record<string, string>,
-        stderr: (data) => console.error('[claude]', data.trim()),
+        // Headless Claude Code leaves out the task list tools the interactive CLI has (turned on
+        // in claudeEnv), and inherited parent-session variables are scrubbed.
+        env: claudeEnv(),
+        stderr: (data) => {
+          this.stderrTail = (this.stderrTail + data).slice(-4000)
+          console.error('[claude]', data.trim())
+        },
         canUseTool: async (toolName, toolInput, opts) => {
-          if (toolName.startsWith('mcp__rcode__')) return { behavior: 'allow', updatedInput: toolInput }
+          const toolUseID = (opts as any).toolUseID as string | undefined
+          if (toolName.startsWith('mcp__rcode__')) return { behavior: 'allow', updatedInput: toolInput, toolUseID }
+          // Nothing is waiting on an answer (the turn ended or was stopped): don't open a card.
+          if (!this.turnActive || this.interrupting) return { behavior: 'deny', message: 'The turn was stopped.', toolUseID }
           const info = classifyClaudeTool(toolName, toolInput, init.cwd)
           const decision = await sink.requestApproval({
             title: toolName === 'ExitPlanMode' ? 'Claude finished planning. Start implementing?' : info.title,
-            detail: info.detail ?? info.diff
+            detail: info.detail ?? info.diff,
+            // Claude Code aborts this when the turn is interrupted or the request is superseded.
+            signal: opts.signal
           })
-          if (decision === 'deny') return { behavior: 'deny', message: 'The user declined this action.' }
+          if (opts.signal?.aborted) return { behavior: 'deny', message: 'The request was withdrawn.', interrupt: true, toolUseID }
+          if (decision === 'deny') return { behavior: 'deny', message: 'The user declined this action.', toolUseID }
           if (toolName === 'ExitPlanMode') {
             this.currentMode = 'acceptEdits'
             this.q?.setPermissionMode('acceptEdits').catch(() => {})
@@ -229,7 +316,10 @@ class ClaudeSession implements AgentSession {
           return {
             behavior: 'allow',
             updatedInput: toolInput,
-            updatedPermissions: decision === 'approveSession' ? opts.suggestions : undefined
+            toolUseID,
+            // "Always allow in this chat" must stay in this session: Claude Code's suggestions
+            // usually target the user's or project's settings files, which would make it permanent.
+            updatedPermissions: decision === 'approveSession' ? sessionRules(toolName, opts.suggestions) : undefined
           }
         }
       }
@@ -239,17 +329,56 @@ class ClaudeSession implements AgentSession {
   }
 
   private async consume(q: Query): Promise<void> {
+    let failure: string | undefined
     try {
-      for await (const msg of q) this.handle(msg)
+      for await (const msg of q) {
+        if (this.q !== q) break // replaced by a newer query: nothing from this one counts any more
+        try {
+          this.handle(msg)
+        } catch (err) {
+          // One malformed message must not end the whole session.
+          console.error('[claude] could not handle message', (msg as any)?.type, err)
+        }
+      }
     } catch (err: any) {
-      if (this.q === q) this.finishTurn(err?.message ?? String(err))
+      failure = err?.message ?? String(err)
     } finally {
       if (this.q === q) {
         this.q = null
         this.input = null
-        this.finishTurn()
+        if (this.turnActive) {
+          // The CLI went away mid-turn (crash, killed, or it refused to start).
+          const why = `${failure ?? ''}\n${this.stderrTail}`
+          if (!this.interrupting && STALE_SESSION_RE.test(why) && this.recoverStaleSession()) return
+          const tail = this.stderrTail.trim().split('\n').slice(-6).join('\n')
+          this.finishTurn(
+            this.interrupting ? undefined : `Claude Code stopped unexpectedly${failure ? `: ${failure}` : '.'}${tail && !failure?.includes(tail) ? `\n${tail}` : ''}`
+          )
+        }
       }
     }
+  }
+
+  /** Forget a session that can't be resumed; the next message starts fresh with the whole chat. */
+  private dropSession(): void {
+    if (!this.sessionId) return
+    console.error('[claude] session', this.sessionId, 'cannot be resumed; starting a new one')
+    this.sessionId = undefined
+    this.needsRecovery = true
+    this.init.sink.setSessionId('')
+  }
+
+  /** The turn failed because its session is gone: replay it once in a fresh session. */
+  private recoverStaleSession(): boolean {
+    const last = this.lastTurn
+    if (!last || this.recoveredOnce || !this.sessionId) return false
+    this.recoveredOnce = true
+    this.closeQuery()
+    this.dropSession()
+    this.init.sink.notice('Claude Code could not resume its earlier session for this chat, so it started a new one with the conversation so far.', 'warn')
+    this.turnActive = false
+    void this.send(last.input).catch((err) => this.finishTurn(err?.message ?? String(err)))
+    return true
   }
 
   private handle(msg: SDKMessage): void {
@@ -274,6 +403,9 @@ class ClaudeSession implements AgentSession {
           sink.upsert({ kind: 'compaction', id: uid('cmp'), ts: Date.now(), tokensBefore: m.compact_metadata?.pre_tokens })
         } else if (m.subtype === 'informational' && m.message) {
           sink.notice(String(m.message), 'info')
+        } else if (m.subtype === 'local_command_output' && typeof m.content === 'string' && m.content.trim()) {
+          // What a slash command like /context or /usage printed: shown as Claude's reply.
+          sink.upsert({ kind: 'assistant', id: uid('as'), ts: Date.now(), text: m.content, agent: 'claude', model: this.currentModel })
         }
         break
       }
@@ -378,8 +510,11 @@ class ClaudeSession implements AgentSession {
           contextTokens: this.lastContext || undefined,
           contextWindow: this.contextWindow
         })
-        const isError = m.subtype !== 'success' || m.is_error
-        const error = isError ? m.errors?.join?.('\n') || (typeof m.result === 'string' ? m.result : 'Claude reported an error') : undefined
+        const aborted = /^aborted/.test(String(m.terminal_reason ?? '')) || this.interrupting
+        const isError = m.subtype !== 'success' || m.is_error || m.api_error_status === 429 || m.api_error_status === 529
+        let error = isError && !aborted ? cleanErrors(m.errors) || (typeof m.result === 'string' && m.result.trim() ? m.result : 'Claude reported an error') : undefined
+        if (error && STALE_SESSION_RE.test(error) && this.recoverStaleSession()) break
+        if (error && /interrupt/i.test(error) && m.subtype !== 'success') error = undefined
         // (CLIs too old to say which messages a reply answered: assume a steer is still pending.)
         if (this.unanswered.size <= (this.tracksAnswers ? 0 : 1)) this.finishTurn(error)
         else {
@@ -430,7 +565,13 @@ class ClaudeSession implements AgentSession {
     this.unanswered.clear()
     if (!this.turnActive) return
     this.turnActive = false
-    this.init.sink.turnDone(error ? { error } : undefined)
+    const interrupted = this.interrupting
+    this.interrupting = false
+    // Per-turn bookkeeping; message ids never repeat, so there's nothing to carry over.
+    this.streamedMessages.clear()
+    this.blockItems.clear()
+    this.thinkingStart.clear()
+    this.init.sink.turnDone(interrupted ? { interrupted: true } : error ? { error } : undefined)
   }
 
   private clearSettle(): void {
@@ -460,13 +601,23 @@ class ClaudeSession implements AgentSession {
     if (!this.q) this.start(input)
     else {
       if (input.model !== this.currentModel) {
-        await this.q.setModel(input.model === 'default' ? undefined : input.model).catch(() => {})
-        this.currentModel = input.model
+        const ok = await withTimeout(
+          this.q.setModel(input.model === 'default' ? undefined : input.model).then(() => true),
+          10000,
+          false
+        )
+        // A model the running CLI won't switch to takes effect by resuming the session with it.
+        if (ok) this.currentModel = input.model
+        else this.closeQuery()
       }
-      if (input.permissionMode !== this.currentMode) {
-        const ok = await this.q.setPermissionMode(PERMISSION_MAP[input.permissionMode]).then(
-          () => true,
-          (err) => (console.error('[claude] setPermissionMode', err?.message ?? err), false)
+      if (this.q && input.permissionMode !== this.currentMode) {
+        const ok = await withTimeout(
+          this.q.setPermissionMode(PERMISSION_MAP[input.permissionMode]).then(
+            () => true,
+            (err) => (console.error('[claude] setPermissionMode', err?.message ?? err), false)
+          ),
+          10000,
+          false
         )
         // A mode the running CLI refuses takes effect by resuming the session in it.
         if (ok) this.currentMode = input.permissionMode
@@ -478,10 +629,17 @@ class ClaudeSession implements AgentSession {
     for (const img of input.images ?? []) {
       content.push({ type: 'image', source: { type: 'base64', media_type: img.mimeType, data: img.data } })
     }
-    content.push({ type: 'text', text: input.text })
+    // A fresh session (the old one couldn't be resumed) gets the whole conversation so far.
+    const text = this.needsRecovery && input.recoveryContext ? input.recoveryContext() : input.text
+    this.needsRecovery = false
+    content.push({ type: 'text', text })
+    // Claude Code only runs a slash command sent as plain text, not wrapped in content blocks.
+    const message = content.length === 1 && parseSlashCommand(text) ? text : content
+    this.lastTurn = { input, content }
     this.clearSettle()
+    this.interrupting = false
     this.turnActive = true
-    this.push(content)
+    this.push(message as any)
   }
 
   async steer(text: string): Promise<boolean> {
@@ -492,13 +650,25 @@ class ClaudeSession implements AgentSession {
   }
 
   async interrupt(): Promise<void> {
-    await this.q?.interrupt().catch(() => {})
+    if (!this.turnActive) return
+    this.interrupting = true
+    this.clearSettle()
+    const q = this.q
+    if (!q) return this.finishTurn()
+    const ok = await withTimeout(q.interrupt().then(() => true), 8000, false)
+    // A CLI that won't acknowledge the interrupt is wedged: close it (the next message resumes
+    // the session in a new process) and end the turn here.
+    if (!ok && this.q === q) {
+      this.closeQuery()
+      this.finishTurn()
+    }
   }
 
   async compact(): Promise<void> {
     if (!this.q) {
       this.start({ text: '', model: this.currentModel ?? this.init.model, effort: this.init.effort, permissionMode: this.currentMode })
     }
+    this.interrupting = false
     this.turnActive = true
     this.input!.push({ type: 'user', message: { role: 'user', content: '/compact' }, parent_tool_use_id: null } as SDKUserMessage)
   }
@@ -521,7 +691,20 @@ class ClaudeSession implements AgentSession {
   }
 }
 
+/**
+ * Rules for "Always allow in this chat": Claude Code's own suggestions, re-targeted at this
+ * session only (they usually name a settings file), or a rule allowing the tool if it has none.
+ */
+function sessionRules(toolName: string, suggestions: any[] | undefined): any[] {
+  const rules = (suggestions ?? []).filter((s) => s && typeof s === 'object').map((s) => ({ ...s, destination: 'session' }))
+  return rules.length ? rules : [{ type: 'addRules', rules: [{ toolName }], behavior: 'allow', destination: 'session' }]
+}
+
 let modelCache: ModelOption[] | null = null
+const claudeCommands = commandCache()
+
+/** Claude Code's own commands that need its interactive UI; sent headless they do nothing useful. */
+const CLAUDE_INTERACTIVE_ONLY = new Set(['clear', 'heapdump', 'workflow-launch-exec', 'auto-mode-setup', 'config', 'login', 'logout', 'exit', 'quit', 'vim', 'theme', 'terminal-setup', 'ide', 'doctor', 'resume', 'rewind', 'permissions', 'hooks', 'agents', 'mcp', 'plugin', 'plugins', 'model', 'status', 'statusline', 'output-style', 'bashes', 'tasks', 'add-dir', 'export', 'upgrade', 'feedback', 'bug', 'help', 'memory', 'privacy-settings', 'remote-env', 'install-github-app', 'install-slack-app', 'migrate-installer', 'release-notes', 'chrome', 'fast', 'sandbox'])
 
 export const claudeAdapter: AgentAdapter = {
   id: 'claude',
@@ -559,7 +742,7 @@ export const claudeAdapter: AgentAdapter = {
     if (!exe) return FALLBACK_MODELS
     // Ask Claude Code itself which models this account can use.
     const input = new InputQueue()
-    const q = query({ prompt: input, options: { pathToClaudeCodeExecutable: exe, settingSources: ['user'], cwd: homedir() } })
+    const q = query({ prompt: input, options: { pathToClaudeCodeExecutable: exe, settingSources: ['user'], cwd: homedir(), env: claudeEnv() } })
     try {
       const models = await Promise.race([
         q.supportedModels(),
@@ -592,7 +775,7 @@ export const claudeAdapter: AgentAdapter = {
     if (!exe) return null
     // The same data Claude Code's /usage shows (experimental in the SDK, so read defensively).
     const input = new InputQueue()
-    const q: any = query({ prompt: input, options: { pathToClaudeCodeExecutable: exe, settingSources: ['user'], cwd: homedir() } })
+    const q: any = query({ prompt: input, options: { pathToClaudeCodeExecutable: exe, settingSources: ['user'], cwd: homedir(), env: claudeEnv() } })
     try {
       const read = q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
       if (typeof read !== 'function') return null
@@ -623,6 +806,40 @@ export const claudeAdapter: AgentAdapter = {
         /* ignore */
       }
     }
+  },
+
+  listCommands(_settings, cwd): Promise<SlashCommand[]> {
+    return claudeCommands(cwd, async () => {
+      const exe = claudeExecutable()
+      if (!exe) return []
+      // Ask Claude Code itself, in the chat's folder, so project commands, skills and plugins show up.
+      const input = new InputQueue()
+      const q = query({
+        prompt: input,
+        options: { pathToClaudeCodeExecutable: exe, settingSources: ['user', 'project', 'local'], cwd, env: claudeEnv(), persistSession: false, settings: { disableAllHooks: true } as any }
+      })
+      try {
+        const list = await Promise.race([q.supportedCommands(), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 20000))])
+        const seen = new Set<string>()
+        const out: SlashCommand[] = []
+        for (const c of list) {
+          const name = String(c.name ?? '').replace(/^\//, '')
+          // (/clear would reset Claude's session behind R-Code's back; start a new chat instead.)
+          if (!name || name.startsWith('_') || seen.has(name) || (c.builtin && CLAUDE_INTERACTIVE_ONLY.has(name))) continue
+          seen.add(name)
+          out.push({ name, description: c.description || undefined, argumentHint: c.argumentHint || undefined, source: c.builtin ? 'built-in' : undefined })
+        }
+        // Claude Code's own commands first, then skills, plugins and project commands.
+        return [...out.filter((c) => c.source === 'built-in'), ...out.filter((c) => c.source !== 'built-in')]
+      } finally {
+        input.close()
+        try {
+          q.close?.()
+        } catch {
+          /* ignore */
+        }
+      }
+    })
   },
 
   createSession(init: SessionInit): AgentSession {

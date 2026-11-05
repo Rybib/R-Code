@@ -11,10 +11,11 @@ import {
   type ThreadEvent,
   type ThreadSummary,
   type TimelineItem,
-  type Usage
+  type Usage,
+  parseSlashCommand
 } from '@shared/types'
 import type { AgentAdapter, AgentSession, ApprovalDecision, BridgeInfo, TurnSink } from './agents/base'
-import { truncate, uid } from './agents/base'
+import { truncate, uid, withTimeout } from './agents/base'
 import { claudeAdapter } from './agents/claude'
 import { codexAdapter } from './agents/codex'
 import { piAdapter } from './agents/pi'
@@ -55,6 +56,12 @@ export class Orchestrator {
   private pendingDeltas = new Map<string, { threadId: string; itemId: string; field: 'text' | 'output'; delta: string }>()
   private flushTimer: NodeJS.Timeout | null = null
   private sessionAllow = new Map<string, Set<string>>()
+  /** Increments with every turn a thread starts, so late timers and events can tell turns apart. */
+  private turnSeq = new Map<string, number>()
+  /** Threads whose running turn the user asked to stop. */
+  private interrupting = new Set<string>()
+  /** Threads whose running turn is a slash command, sent to the agent's harness as typed. */
+  private commandTurns = new Set<string>()
   bridge: BridgeInfo | undefined
 
   constructor(private emit: Emit) {
@@ -159,14 +166,31 @@ export class Orchestrator {
     void this.interrupt(id)
     this.disposeSessions(id)
     this.threads.delete(id)
+    this.running.delete(id)
+    this.queues.delete(id)
+    this.sessionAllow.delete(id)
+    this.interrupting.delete(id)
+    // Anyone waiting on this chat (a delegating parent agent) gets an answer instead of hanging.
+    for (const w of this.turnWaiters.get(id) ?? []) w('The conversation was deleted.')
+    this.turnWaiters.delete(id)
     deleteThreadFile(id)
     this.emit({ type: 'removed', threadId: id })
   }
 
   private disposeSessions(id: string): void {
     const s = this.sessions.get(id)
-    if (s) for (const sess of Object.values(s)) sess?.dispose()
     this.sessions.delete(id)
+    this.denyPendingApprovals(id)
+    if (s) for (const sess of Object.values(s)) safeDispose(sess)
+  }
+
+  /** Close one agent's session for a thread; its next turn starts a new one (resuming its memory). */
+  private disposeSession(id: string, agent: AgentId): void {
+    const map = this.sessions.get(id)
+    const sess = map?.[agent]
+    if (!map || !sess) return
+    delete map[agent]
+    safeDispose(sess)
   }
 
   disposeAll(): void {
@@ -195,10 +219,16 @@ export class Orchestrator {
     }
   }
 
-  private makeSink(t: Thread, agent: AgentId): TurnSink {
+  /**
+   * `alive` says whether this sink's session is still the thread's current one. Once a session
+   * is closed (chat deleted, moved, or a stuck turn force-stopped) anything it still reports is
+   * dropped, so a late event can't resurrect a deleted chat or leak into the next turn.
+   */
+  private makeSink(t: Thread, agent: AgentId, alive: () => boolean = () => this.threads.get(t.id) === t): TurnSink {
     const self = this
     return {
       upsert(item) {
+        if (!alive()) return
         withStats(item)
         const idx = t.items.findIndex((i) => i.id === item.id)
         if (idx >= 0) t.items[idx] = item
@@ -208,6 +238,7 @@ export class Orchestrator {
         saveThread(t)
       },
       append(itemId, field, delta) {
+        if (!alive() || !delta) return
         const item = self.findItem(t, itemId) as any
         if (!item) return
         item[field] = (item[field] ?? '') + delta
@@ -219,6 +250,7 @@ export class Orchestrator {
         saveThread(t)
       },
       patch(itemId, patch) {
+        if (!alive()) return
         const item = self.findItem(t, itemId)
         if (!item) return
         Object.assign(item, patch)
@@ -231,28 +263,37 @@ export class Orchestrator {
         saveThread(t)
       },
       has(itemId) {
-        return !!self.findItem(t, itemId)
+        return alive() && !!self.findItem(t, itemId)
       },
       setPlan(steps) {
+        if (!alive()) return
         t.plan = steps
         self.touch(t)
       },
       setUsage(u: Partial<Usage>) {
+        if (!alive()) return
         const clean = Object.fromEntries(Object.entries(u).filter(([, v]) => v !== undefined))
         t.usage = { inputTokens: 0, outputTokens: 0, ...(t.usage ?? {}), ...clean }
         self.touch(t)
       },
       setSessionId(id) {
-        t.agentSessions[agent] = id
+        if (!alive()) return
+        if (id) t.agentSessions[agent] = id
+        else delete t.agentSessions[agent]
         self.touch(t)
       },
       async requestApproval(req) {
+        if (!alive() || req.signal?.aborted) return 'deny'
         const key = req.key ?? `${req.title}\n${req.detail ?? ''}`
         if (self.sessionAllow.get(t.id)?.has(key)) return 'approveSession'
         const requestId = uid('apr')
         const item: TimelineItem = { kind: 'approval', id: requestId, requestId, ts: Date.now(), title: req.title, detail: req.detail, status: 'pending', parentId: req.parentId }
         this.upsert(item)
-        const decision = await new Promise<ApprovalDecision>((resolve) => self.approvals.set(requestId, { resolve, threadId: t.id, itemId: requestId }))
+        const decision = await new Promise<ApprovalDecision>((resolve) => {
+          self.approvals.set(requestId, { resolve, threadId: t.id, itemId: requestId })
+          // The agent withdrew the request (its turn was interrupted or it timed out): close the card.
+          req.signal?.addEventListener('abort', () => self.respondApproval(requestId, 'deny'), { once: true })
+        })
         if (decision === 'approveSession') {
           if (!self.sessionAllow.has(t.id)) self.sessionAllow.set(t.id, new Set())
           self.sessionAllow.get(t.id)!.add(key)
@@ -260,9 +301,11 @@ export class Orchestrator {
         return decision
       },
       turnDone(result) {
-        self.onTurnDone(t, agent, result?.error)
+        if (!alive()) return
+        self.onTurnDone(t, agent, result?.error, result?.interrupted)
       },
       notice(text, tone = 'info') {
+        if (!alive()) return
         this.upsert({ kind: 'notice', id: uid('n'), ts: Date.now(), text, tone })
       }
     }
@@ -296,7 +339,9 @@ export class Orchestrator {
       const settings = getSettings()
       const cwd = t.projectPath && existsSync(t.projectPath) ? t.projectPath : homedir()
       const isChild = !!t.parentThreadId
-      s = adapters[agent].createSession({
+      let created: AgentSession | undefined
+      const alive = (): boolean => this.threads.get(t.id) === t && !!created && this.sessions.get(t.id)?.[agent] === created
+      s = created = adapters[agent].createSession({
         threadId: t.id,
         cwd,
         resumeId: t.agentSessions[agent],
@@ -304,7 +349,7 @@ export class Orchestrator {
         effort,
         permissionMode: mode,
         settings,
-        sink: this.makeSink(t, agent),
+        sink: this.makeSink(t, agent, alive),
         instructions: [agent === 'pi' ? PI_INSTRUCTIONS : '', isChild ? CHILD_INSTRUCTIONS : ''].filter(Boolean).join('\n\n') || undefined,
         bridge: this.bridge,
         allowDelegation: !isChild
@@ -334,6 +379,19 @@ export class Orchestrator {
         if (digest.trim()) parts.push(`Conversation so far (handled by other agents while you were away):\n${digest}`)
       }
     }
+    if (!parts.length) return undefined
+    return `<conversation-context>\nBackground from this conversation, for reference only. Reply to the user's new message after this block.\n\n${parts.join('\n\n')}\n</conversation-context>`
+  }
+
+  /**
+   * The whole conversation before item `uptoExclusive`, for an agent whose own session couldn't
+   * be resumed and is starting over.
+   */
+  private recoveryContextFor(t: Thread, uptoExclusive: number): string | undefined {
+    const parts: string[] = []
+    if (t.seedContext) parts.push(`Summary carried over from a previous chat:\n${t.seedContext}`)
+    const digest = digestItems(t.items.slice(0, uptoExclusive), t.projectPath)
+    if (digest.replace(/^Project: .*\n?/, '').trim()) parts.push(`Conversation so far (your earlier session for this chat could not be resumed, so this is a new session):\n${digest}`)
     if (!parts.length) return undefined
     return `<conversation-context>\nBackground from this conversation, for reference only. Reply to the user's new message after this block.\n\n${parts.join('\n\n')}\n</conversation-context>`
   }
@@ -379,32 +437,52 @@ export class Orchestrator {
     t.permissionMode = mode
     t.plan = t.plan?.every((s) => s.status === 'completed') ? undefined : t.plan
 
-    const contextBlock = this.contextFor(t, agent, t.items.length)
-    if (t.contextResync?.includes(agent)) t.contextResync = t.contextResync.filter((a) => a !== agent)
+    // A slash command goes to the harness exactly as typed (a context block in front would stop
+    // it being recognized), and the agent catches up on what it missed with the next message.
+    const isCommand = !!parseSlashCommand(opts.text) && !opts.images?.length
+    const contextBlock = isCommand ? undefined : this.contextFor(t, agent, t.items.length)
+    if (!isCommand && t.contextResync?.includes(agent)) t.contextResync = t.contextResync.filter((a) => a !== agent)
     const wasQueued = queuedItemId ? t.items.findIndex((i) => i.id === queuedItemId) : -1
     if (wasQueued >= 0) t.items.splice(wasQueued, 1)
     const userItem: TimelineItem = { kind: 'user', id: wasQueued >= 0 ? queuedItemId! : uid('u'), ts: Date.now(), text: opts.text, images: opts.images, agent }
     t.items.push(userItem)
     if (wasQueued >= 0) this.emit({ type: 'reset', threadId, items: t.items })
     else this.emit({ type: 'item', threadId, item: userItem })
-    if (t.title === 'New conversation' && getSettings().autoTitle) t.title = makeTitle(opts.text)
+    // A slash command makes a poor title; the first real message names the chat.
+    if (t.title === 'New conversation' && getSettings().autoTitle && !isCommand) t.title = makeTitle(opts.text)
+    const userIndex = t.items.length - 1
     this.running.set(threadId, agent)
+    this.interrupting.delete(threadId)
+    if (isCommand) this.commandTurns.add(threadId)
+    else this.commandTurns.delete(threadId)
+    this.turnSeq.set(threadId, (this.turnSeq.get(threadId) ?? 0) + 1)
     this.emit({ type: 'status', threadId, running: true })
     this.touch(t)
 
     const prompt = contextBlock ? `${contextBlock}\n\n${opts.text}` : opts.text
+    const recoveryPrompt = (): string => {
+      if (isCommand) return opts.text
+      const ctx = this.recoveryContextFor(t, userIndex)
+      return ctx ? `${ctx}\n\n${opts.text}` : opts.text
+    }
+    const turn = this.turnSeq.get(threadId)
     try {
       const sess = this.session(t, agent, model, effort, mode)
-      await sess.send({ text: prompt, images: opts.images, model, effort, permissionMode: mode })
+      await sess.send({ text: prompt, images: opts.images, model, effort, permissionMode: mode, recoveryContext: recoveryPrompt })
     } catch (err: any) {
-      this.onTurnDone(t, agent, err?.message ?? String(err))
+      // Only fail the turn this call started (a stop + resend may already have moved on).
+      if (this.turnSeq.get(threadId) === turn) this.onTurnDone(t, agent, err?.message ?? String(err))
     }
   }
 
-  private onTurnDone(t: Thread, agent: AgentId, error?: string): void {
+  private onTurnDone(t: Thread, agent: AgentId, error?: string, interrupted?: boolean): void {
     refreshUsageSoon(agent)
-    if (!this.running.has(t.id)) return
+    // A late report from another agent (or a session that was force-stopped) isn't this turn's end.
+    if (this.running.get(t.id) !== agent) return
     this.running.delete(t.id)
+    if (this.interrupting.delete(t.id)) interrupted = true
+    // Stopping makes agents report an "aborted" error; the user asked for it, so it isn't one.
+    if (interrupted) error = undefined
     this.denyPendingApprovals(t.id)
     for (const item of t.items) {
       if ('streaming' in item && item.streaming) {
@@ -412,7 +490,11 @@ export class Orchestrator {
         this.emit({ type: 'item', threadId: t.id, item })
       }
       if (item.kind === 'tool' && item.status === 'running') {
-        item.status = error ? 'error' : 'done'
+        item.status = error || interrupted ? 'error' : 'done'
+        this.emit({ type: 'item', threadId: t.id, item })
+      }
+      if (item.kind === 'delegation' && item.status === 'running' && interrupted) {
+        item.status = 'error'
         this.emit({ type: 'item', threadId: t.id, item })
       }
     }
@@ -435,7 +517,8 @@ export class Orchestrator {
       t.items.push(n)
       this.emit({ type: 'item', threadId: t.id, item: n })
     }
-    t.agentSeenUpTo[agent] = t.items.length
+    // After a slash command the agent still hasn't seen what other agents did before it.
+    if (!this.commandTurns.delete(t.id)) t.agentSeenUpTo[agent] = t.items.length
     this.maybeSuggestFreshStart(t)
     this.emit({ type: 'status', threadId: t.id, running: false })
     this.touch(t)
@@ -503,13 +586,22 @@ export class Orchestrator {
     const agent = this.running.get(threadId)
     if (!keepQueue) this.dropQueue(threadId)
     if (!agent) return
+    const turn = this.turnSeq.get(threadId)
+    this.interrupting.add(threadId)
     this.denyPendingApprovals(threadId)
+    // Stop sub-agents this turn delegated to, so they don't keep working unseen.
+    for (const child of this.threads.values()) if (child.parentThreadId === threadId && this.running.has(child.id)) void this.interrupt(child.id)
     const sess = this.sessions.get(threadId)?.[agent]
-    await sess?.interrupt()
-    // Some agents don't send a terminal event after an abort; make sure we settle.
+    // An agent that's wedged may never answer the interrupt request itself.
+    await withTimeout(sess?.interrupt() ?? Promise.resolve(), 5000, undefined)
+    // If the agent hasn't confirmed it stopped, force it: close its session (the next message
+    // resumes the agent's memory in a new one) so nothing from this turn leaks into the next.
     setTimeout(() => {
       const t = this.threads.get(threadId)
-      if (t && this.running.get(threadId) === agent) this.onTurnDone(t, agent)
+      if (!t || this.running.get(threadId) !== agent || this.turnSeq.get(threadId) !== turn) return
+      console.error(`[orchestrator] ${agent} did not confirm the interrupt; closing its session`)
+      this.disposeSession(threadId, agent)
+      this.onTurnDone(t, agent, undefined, true)
     }, 4000)
   }
 
@@ -531,6 +623,8 @@ export class Orchestrator {
     const sess = this.session(t, t.agent, t.model, t.effort, t.permissionMode)
     if (t.agent === 'claude') {
       this.running.set(threadId, t.agent)
+      this.interrupting.delete(threadId)
+      this.turnSeq.set(threadId, (this.turnSeq.get(threadId) ?? 0) + 1)
       this.emit({ type: 'status', threadId, running: true })
     }
     try {
@@ -697,6 +791,14 @@ export class Orchestrator {
     this.emit({ type: 'item', threadId: t.id, item: n })
     saveThread(t)
     return 'The user has been shown a button to continue in a fresh chat with your summary. Finish your current reply normally.'
+  }
+}
+
+function safeDispose(sess: AgentSession | undefined): void {
+  try {
+    sess?.dispose()
+  } catch (err) {
+    console.error('[orchestrator] dispose failed', err)
   }
 }
 
