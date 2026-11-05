@@ -7,7 +7,8 @@ import { AgentCard } from './AgentCard'
 import { OllamaCard } from './ModelsPage'
 import { WhisperChooser, TtsDownload } from './VoicePage'
 import { DefaultModel } from './Settings'
-import { AgentIcon, Button, Logo, Row, Toggle } from '../components/ui'
+import { AgentIcon, Button, Row, Toggle } from '../components/ui'
+import { Logo3D } from '../components/Logo3D'
 
 const STEPS = ['Welcome', 'Agents', 'Models', 'Voice', 'Ready'] as const
 
@@ -45,7 +46,7 @@ export function Onboarding(): React.JSX.Element {
         <div key={step} className="fade-up min-h-0 flex-1 overflow-y-auto rounded-2xl border border-line bg-panel p-8 shadow-[var(--shadow)]">
           {step === 0 && (
             <div className="flex flex-col items-center py-6 text-center">
-              <Logo size={128} />
+              <Logo3D size={128} />
               <h1 className="mt-6 text-[28px] font-semibold tracking-tight text-fg">Welcome to R-Code</h1>
               <p className="mt-3 max-w-md text-[14px] leading-relaxed text-fg-2">
                 One calm home for your coding agents. Use <b>Claude Code</b> and <b>Codex</b> straight from their CLIs, and R-Code&apos;s <b>built-in Pi agent</b> for local Ollama models and any other provider — all in the same chat, sharing context.

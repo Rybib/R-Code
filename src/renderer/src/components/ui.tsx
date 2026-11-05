@@ -5,33 +5,24 @@ import type { AgentId } from '@shared/types'
 import { useStore } from '../store'
 
 export function Logo({ size = 140, className }: { size?: number; className?: string }): React.JSX.Element {
-  // R-Code's mark: an open ring (the "C" of Code) with a bold R whose leg sweeps out
-  // through the opening — glassy blue, in the spirit of Poolside's hero mark.
+  // R-Code's mark, flat: the </> from the app icon in glassy blue. Logo3D is the live version.
+  const glyphs = 'M60 54 L32 80 L60 106 M91 42 L69 118 M100 54 L128 80 L100 106'
   return (
     <svg width={size} height={size} viewBox="0 0 160 160" className={className} aria-hidden>
       <defs>
-        <linearGradient id="rc-fill" x1="24" y1="16" x2="140" y2="148" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#9cc3ff" />
-          <stop offset="0.5" stopColor="#3773ef" />
-          <stop offset="1" stopColor="#173f9e" />
+        <linearGradient id="rc-fill" x1="24" y1="30" x2="136" y2="130" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#d9e8ff" />
+          <stop offset="0.5" stopColor="#7aa8ff" />
+          <stop offset="1" stopColor="#3773ef" />
         </linearGradient>
-        <linearGradient id="rc-shine" x1="30" y1="20" x2="120" y2="140" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#ffffff" stopOpacity="0.75" />
-          <stop offset="0.45" stopColor="#ffffff" stopOpacity="0.08" />
+        <linearGradient id="rc-shine" x1="30" y1="30" x2="120" y2="130" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#ffffff" stopOpacity="0.85" />
+          <stop offset="0.5" stopColor="#ffffff" stopOpacity="0.15" />
           <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
         </linearGradient>
-        <radialGradient id="rc-glow" cx="80" cy="84" r="78" gradientUnits="userSpaceOnUse">
-          <stop offset="0.5" stopColor="#3773ef" stopOpacity="0.28" />
-          <stop offset="1" stopColor="#3773ef" stopOpacity="0" />
-        </radialGradient>
       </defs>
-      <circle cx="80" cy="82" r="76" fill="url(#rc-glow)" />
-      {/* open ring, gap at the lower right */}
-      <path d="M118.5 112.5 A50 50 0 1 1 129.4 70.6" fill="none" stroke="url(#rc-fill)" strokeWidth="14" strokeLinecap="round" />
-      <path d="M118.5 112.5 A50 50 0 1 1 129.4 70.6" fill="none" stroke="url(#rc-shine)" strokeWidth="4" strokeLinecap="round" transform="translate(-2 -3)" />
-      {/* R: stem + bowl, leg sweeping out through the gap */}
-      <path d="M62 108 V54 h21 a15 15 0 0 1 0 30 h-21 M80 84 L113 117" fill="none" stroke="url(#rc-fill)" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M62 108 V54 h21 a15 15 0 0 1 0 30 h-21 M80 84 L113 117" fill="none" stroke="url(#rc-shine)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" transform="translate(-1.5 -2)" />
+      <path d={glyphs} fill="none" stroke="url(#rc-fill)" strokeWidth="15" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={glyphs} fill="none" stroke="url(#rc-shine)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" transform="translate(-1.5 -2.5)" />
     </svg>
   )
 }

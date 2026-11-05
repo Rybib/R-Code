@@ -23,7 +23,8 @@ import { AgentCard } from './AgentCard'
 import { ModelsPage } from './ModelsPage'
 import { VoicePage } from './VoicePage'
 import { ToolsPage } from './ToolsPage'
-import { AgentIcon, Button, Card, Logo, Row, Select, Toggle } from '../components/ui'
+import { AgentIcon, Button, Card, Row, Select, Toggle } from '../components/ui'
+import { Logo3D } from '../components/Logo3D'
 import { ModelPicker } from '../components/ModelPicker'
 
 const PAGES: { id: SettingsPage; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
@@ -318,7 +319,7 @@ function AboutPage(): React.JSX.Element {
   return (
     <>
       <div className="flex flex-col items-center py-6 text-center">
-        <Logo size={96} />
+        <Logo3D size={96} />
         <h1 className="mt-4 text-[22px] font-semibold text-fg">R-Code</h1>
         <p className="mt-1 text-[13px] text-fg-3">Version {version}</p>
         <p className="mt-3 max-w-md text-[13px] text-fg-2">One calm place for Claude Code, Codex and a built-in Pi agent — with shared context, delegation, and on-device voice.</p>
